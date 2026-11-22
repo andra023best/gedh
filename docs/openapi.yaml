@@ -27,7 +27,7 @@ info:
 
     **Помилки.** Тіло `{"detail": "КОД", "message": "…"}`; код стабільний, текст перекладає інтерфейс
     (NFR-22). Помилки валідації — 422 у форматі FastAPI (`detail` — масив полів).
-    Ліміт запитів (NFR-20) — 429 із заголовком `Retry-After`; IP клієнта береться лише з
+    Ліміт запитів (NFR-18: 10 спроб входу за хв з IP, 60 запитів за хв на API-ключ) — 429 із заголовком `Retry-After`; IP клієнта береться лише з
     `x-vercel-forwarded-for` (S-07).
   license:
     name: Навчальний проєкт ОІ-34
@@ -1479,10 +1479,10 @@ components:
       description: "`INVALID_STATE` — дія недоступна в поточному статусі; поле `status`"
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
     FileTooLarge:
-      description: "`FILE_TOO_LARGE` — набір > 5 МБ (NFR-18) або документ > 2 МБ (NFR-19)"
+      description: "`FILE_TOO_LARGE` — набір > 5 МБ або документ > 2 МБ (NFR-19)"
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
     TooManyRequests:
-      description: "`RATE_LIMITED` (NFR-20)"
+      description: "`RATE_LIMITED` (NFR-18)"
       headers:
         Retry-After: { schema: { type: integer }, description: секунди }
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
@@ -1603,9 +1603,9 @@ components:
         password:
           type: string
           format: password
-          minLength: 12
+          minLength: 10
           maxLength: 128
-          description: NFR-14 — не менше 12 символів, перевірка за списком зламаних паролів
+          description: "NFR-14 — щонайменше 10 символів, обов'язково літери й цифри"
         country_code: { type: string, pattern: "^[A-Z]{3}$" }
         account_type: { type: string, enum: [INDIVIDUAL, ORGANIZATION_MEMBER] }
         organization_id: { type: [string, "null"], format: uuid, description: "Верифікована організація (ORGANIZATION_MEMBER)" }

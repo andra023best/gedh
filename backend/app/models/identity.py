@@ -73,6 +73,11 @@ class RegistrationRequest(Base):
     decision_reason: Mapped[str | None] = mapped_column(Text)
     # +reviewer 0..1
     reviewer_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
+    # Доповнення до рис. 5.2 (S-17): яку організацію вказав заявник і листування щодо уточнення (UC-02 AC1)
+    requested_organization_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("organizations.id"))
+    requested_organization_name: Mapped[str | None] = mapped_column(String(200))
+    clarification_note: Mapped[str | None] = mapped_column(Text)
+    clarification_answer: Mapped[str | None] = mapped_column(Text)
 
 
 class ConsentRecord(Base):

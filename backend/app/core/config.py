@@ -19,6 +19,17 @@ class Settings(BaseSettings):
     # SQ-05 / S-08: секрет, який Vercel додає до кожного запиту /api/*. Якщо задано,
     # API відхиляє запити без нього (прямі звернення на Render в обхід Vercel).
     gedh_proxy_secret: str | None = None
+    # Підпис JWT (NFR-20: лише в змінних середовища). Render генерує значення сам (render.yaml).
+    jwt_secret: str | None = None
+    # Лист через Brevo (HTTP API). Без ключа листи лише пишуться в журнал сервера (локально й у тестах).
+    brevo_api_key: str | None = None
+    mail_from: str = "noreply@gedh.invalid"
+    mail_from_name: str = "GEDH"
+    # Пароль демо-облікових записів (*@demo.gedh.invalid); без нього демо-вхід вимкнено.
+    demo_password: str | None = None
+    rate_limit_enabled: bool = True
+    # Секрет службових задач (GitHub Actions → /api/internal/jobs/*).
+    job_token: str | None = None
 
     @property
     def sqlalchemy_url(self) -> str | None:

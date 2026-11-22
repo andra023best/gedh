@@ -22,3 +22,11 @@ services:
         sync: false # адреса сайту на Vercel
       - key: GEDH_PROXY_SECRET
         sync: false # той самий секрет, що й у Vercel (SQ-05, S-08)
+      - key: JWT_SECRET
+        generateValue: true # Render генерує випадкове значення сам; ніде не записується (NFR-20)
+      - key: DEMO_PASSWORD
+        sync: false # пароль демо-облікових записів *@demo.gedh.invalid (вводиться в панелі Render)
+      - key: BREVO_API_KEY
+        sync: false # ключ API Brevo для листів (S-18)
+      - key: MAIL_FROM
+        sync: false # адреса відправника, підтверджена в Brevo

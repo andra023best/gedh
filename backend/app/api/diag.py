@@ -17,7 +17,7 @@ from app.core.config import get_settings
 router = APIRouter(prefix="/diag", tags=["diagnostics"])
 
 COOKIE_NAME = "gedh_diag"
-MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # NFR-18: файл набору ≤ 5 МБ
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # NFR-19: файл набору ≤ 5 МБ
 SHOWN_HEADERS = (
     "host",
     "x-forwarded-for",

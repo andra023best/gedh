@@ -13,17 +13,20 @@ from datetime import UTC, date, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core import consent, security
+from app.core.config import get_settings
 from app.core.db import new_session
 from app.models.datasets import DatasetVersion, Observation, OpenDataset, RestrictedDataset, SourceReference
 from app.models.enums import (
     AccountStatus,
     Classification,
+    ConsentAction,
     DatasetStatus,
     Frequency,
     VerificationStatus,
     VersionStatus,
 )
-from app.models.identity import Organization, User
+from app.models.identity import ConsentRecord, Organization, User
 from app.models.ingestion import QualityReport, QualityRule
 from app.models.reference import Country, DataCategory, Indicator
 from app.seed import demo_data, reference_data
@@ -36,6 +39,21 @@ LICENCES = {"WB": "CC BY 4.0", "IMF": "IMF Terms of Use", "BIS": "BIS Terms of U
 
 def sid(kind: str, key: str) -> uuid.UUID:
     return uuid.uuid5(NS, f"{kind}:{key}")
+
+
+def set_demo_passwords(s: Session, users: list[User]) -> None:
+    """Пароль демо-користувачів — лише зі змінної DEMO_PASSWORD (не в коді); плюс запис згоди."""
+    password = get_settings().demo_password
+    if password and not security.password_problems(password):
+        for u in users:
+            if not security.verify_password(u.password_hash, password):
+                u.password_hash = security.hash_password(password)
+    for u in users:
+        has_consent = s.scalar(select(ConsentRecord.id).where(ConsentRecord.user_id == u.id))
+        if not has_consent:
+            s.add(
+                ConsentRecord(user_id=u.id, text_version=consent.CURRENT_VERSION, action=ConsentAction.GIVEN)
+            )
 
 
 def seed_reference(s: Session) -> None:
@@ -187,6 +205,7 @@ def seed_demo(s: Session) -> None:
             )
         )
     s.flush()
+    set_demo_passwords(s, list(users.values()))
 
     providers = {org_key: sid("user", email) for email, *_, role, org_key in demo_data.USERS if org_key}
     freq_of = {code: freq for code, _, _, _, _, _, freq, *_ in reference_data.RESTRICTED_INDICATORS}

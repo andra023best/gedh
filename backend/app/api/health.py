@@ -7,6 +7,7 @@ from fastapi import APIRouter
 from app import __version__
 from app.core.config import get_settings
 from app.core.db import check_database
+from app.core.security import jwt_secret_is_ephemeral
 
 router = APIRouter(tags=["service"])
 
@@ -24,4 +25,13 @@ def health() -> dict:
         # Мале значення uptime після паузи означає, що Render щойно «прокинувся» (холодний старт).
         "uptime_s": round((now - STARTED_AT).total_seconds()),
         "db": check_database(),
+        # Попередження конфігурації (без значень секретів)
+        "warnings": [
+            w
+            for w, bad in (
+                ("JWT_SECRET_EPHEMERAL", jwt_secret_is_ephemeral()),
+                ("MAIL_DISABLED", not get_settings().brevo_api_key),
+            )
+            if bad
+        ],
     }

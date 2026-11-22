@@ -3,7 +3,7 @@
 Імпорт усіх модулів тут потрібен, щоб Alembic бачив усі таблиці в Base.metadata.
 """
 
-from app.models import audit, datasets, exchange, identity, ingestion, reference
+from app.models import audit, datasets, exchange, identity, ingestion, reference, technical
 from app.models.base import Base
 
-__all__ = ["Base", "audit", "datasets", "exchange", "identity", "ingestion", "reference"]
+__all__ = ["Base", "audit", "datasets", "exchange", "identity", "ingestion", "reference", "technical"]
