@@ -1,0 +1,5 @@
+# Однакові закінчення рядків (LF) для всієї команди; Dockerfile і скрипти в Linux-контейнері ламаються з CRLF.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
