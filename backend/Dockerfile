@@ -9,10 +9,13 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
+COPY alembic.ini .
+COPY alembic ./alembic
 COPY app ./app
 
 RUN useradd --create-home appuser
 USER appuser
 
+# Під час кожного старту: міграції схеми й ідемпотентне заповнення довідників і демо-даних, потім API.
 # Render передає порт у $PORT; --proxy-headers, бо запити приходять через проксі Render і Vercel.
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]
+CMD ["sh", "-c", "alembic upgrade head && python -m app.seed --demo && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]

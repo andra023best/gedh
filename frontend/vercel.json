@@ -1,7 +1,20 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "rewrites": [
-    { "source": "/api/:path*", "destination": "https://gedh-api.onrender.com/api/:path*" },
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "https://gedh-api.onrender.com/api/$1",
+      "transforms": [
+        {
+          "type": "request.headers",
+          "op": "set",
+          "target": { "key": "x-gedh-proxy-secret" },
+          "args": "$GEDH_PROXY_SECRET",
+          "env": ["GEDH_PROXY_SECRET"]
+        }
+      ]
+    },
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/index.html" }
   ]
 }

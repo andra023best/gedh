@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     # Secure-атрибут cookie; локально по http має бути false.
     cookie_secure: bool = False
     frontend_base_url: str = "http://localhost:5173"
+    # SQ-05 / S-08: секрет, який Vercel додає до кожного запиту /api/*. Якщо задано,
+    # API відхиляє запити без нього (прямі звернення на Render в обхід Vercel).
+    gedh_proxy_secret: str | None = None
 
     @property
     def sqlalchemy_url(self) -> str | None:

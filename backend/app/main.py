@@ -5,6 +5,7 @@ from fastapi import APIRouter, FastAPI
 from app import __version__
 from app.api import diag, health
 from app.core.config import get_settings
+from app.core.proxy_guard import ProxyGuardMiddleware
 
 
 def create_app() -> FastAPI:
@@ -21,6 +22,7 @@ def create_app() -> FastAPI:
     if settings.diag_enabled:
         api.include_router(diag.router)
     app.include_router(api)
+    app.add_middleware(ProxyGuardMiddleware, secret=settings.gedh_proxy_secret)
     return app
 
 

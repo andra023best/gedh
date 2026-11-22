@@ -20,3 +20,5 @@ services:
         value: "true"
       - key: FRONTEND_BASE_URL
         sync: false # адреса сайту на Vercel
+      - key: GEDH_PROXY_SECRET
+        sync: false # той самий секрет, що й у Vercel (SQ-05, S-08)

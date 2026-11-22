@@ -4,6 +4,7 @@ import time
 from functools import lru_cache
 
 from sqlalchemy import Engine, create_engine, text
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
 
@@ -15,6 +16,13 @@ def get_engine() -> Engine | None:
         return None
     # Render Free: 1 процес, 512 МБ — малий пул; pre_ping відновлює з'єднання після сну Neon.
     return create_engine(url, pool_size=2, max_overflow=2, pool_pre_ping=True)
+
+
+def new_session() -> Session:
+    engine = get_engine()
+    if engine is None:
+        raise RuntimeError("DATABASE_URL не задано")
+    return sessionmaker(engine, expire_on_commit=False)()
 
 
 def check_database() -> dict:

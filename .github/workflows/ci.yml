@@ -33,6 +33,13 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
       - run: ruff format --check .
+      - name: Міграції (вгору, вниз, вгору) і перевірка відповідності моделей
+        run: |
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head
+          alembic check
+      - run: python -m app.seed --demo
       - run: pytest -q
 
   frontend:
