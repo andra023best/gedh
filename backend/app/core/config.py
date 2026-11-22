@@ -1,12 +1,16 @@
 """Налаштування застосунку зі змінних середовища (NFR-16: секрети лише поза кодом)."""
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    # backend/.env — незалежно від того, з якої папки запущено сервер (на Render файлу немає, лише змінні)
+    model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8", extra="ignore")
 
     app_env: str = "local"  # local | production
     # Рядок підключення Neon: postgresql://user:password@host/db?sslmode=require

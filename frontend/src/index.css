@@ -1,4 +1,4 @@
-/* Мінімальні стилі етапу Е0; дизайн — окремим кроком (S-05). */
+/* Мінімальні функціональні стилі; дизайн — окремим кроком (S-05). */
 body {
   font-family: system-ui, sans-serif;
   margin: 0;
@@ -6,13 +6,82 @@ body {
   color: #1a1a1a;
 }
 main {
-  max-width: 860px;
+  max-width: 960px;
   margin: 0 auto;
   padding: 16px;
 }
 section {
-  border-top: 1px solid #ccc;
   padding: 8px 0 16px;
+}
+.narrow {
+  max-width: 560px;
+}
+.nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  padding: 8px 16px;
+  border-bottom: 1px solid #ccc;
+}
+.nav nav {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+}
+.nav a.active {
+  font-weight: bold;
+}
+.brand {
+  font-weight: bold;
+  color: #1f4e79;
+  text-decoration: none;
+}
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.form label.inline {
+  flex-direction: row;
+  align-items: center;
+}
+input,
+select,
+textarea {
+  font: inherit;
+  padding: 4px;
+}
+fieldset {
+  border: 1px solid #ccc;
+}
+.consent-text {
+  white-space: pre-wrap;
+  max-height: 220px;
+  overflow-y: auto;
+  background: #f4f4f4;
+  padding: 8px;
+  font-size: 0.9em;
+}
+.error {
+  color: #b00020;
+}
+.ok {
+  color: #1b6e20;
+}
+.hint {
+  color: #555;
+  font-size: 0.9em;
+}
+.banner {
+  background: #fff4d6;
+  padding: 8px 16px;
+  border-bottom: 1px solid #e0c060;
 }
 .mark {
   display: inline-block;
@@ -25,6 +94,56 @@ pre {
   background: #f4f4f4;
   padding: 8px;
   overflow-x: auto;
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+th,
+td {
+  border: 1px solid #ccc;
+  padding: 4px 6px;
+  text-align: left;
+  vertical-align: top;
+}
+tr.selected {
+  background: #eef4fa;
+}
+.kv {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+}
+.kv dt {
+  font-weight: bold;
+}
+.kv dd {
+  margin: 0;
+}
+.card {
+  border: 1px solid #1f4e79;
+  padding: 12px;
+  margin-top: 16px;
+}
+.danger {
+  color: #b00020;
+}
+.danger-box {
+  border: 1px solid #b00020;
+  padding: 12px;
+}
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.modal-body {
+  background: #fff;
+  max-width: 640px;
+  padding: 16px;
 }
 button {
   margin: 4px 0;

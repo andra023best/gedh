@@ -31,6 +31,11 @@ def send(mail: Mail) -> bool:
     if not s.brevo_api_key:
         OUTBOX.append(mail)
         log.info("лист не надіслано (немає BREVO_API_KEY): тема «%s»", mail.subject)
+        if s.app_env == "local":  # лише локально: посилання з листа видно в консолі сервера
+            try:
+                print(f"[mail -> {mail.to}] {mail.subject}\n{mail.text}", flush=True)
+            except UnicodeEncodeError:  # консоль Windows (cp1251) — друкуємо хоча б посилання
+                print(f"[mail -> {mail.to}] " + mail.text.encode("ascii", "replace").decode(), flush=True)
         return False
     body = {
         "sender": {"email": s.mail_from, "name": s.mail_from_name},

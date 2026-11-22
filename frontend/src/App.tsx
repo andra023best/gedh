@@ -1,180 +1,159 @@
-// Етап Е0 (S-05): сторінка перевірки, що система працює наскрізь. Без дизайну — він буде пізніше.
+// Каркас застосунку: меню за роллю, маршрути, банер «сервер прокидається», вікно нової версії згоди.
+// Дизайн — окремим кроком (S-05); тут лише функціональні сторінки.
 import { useEffect, useState } from 'react';
-import { fetchWithWake, getJson, sha256Hex, type WakeProgress } from './api';
+import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { fetchWithWake, type WakeProgress } from './api';
+import { RequireAuth } from './lib/auth';
+import { useAuth } from './lib/authContext';
+import { ROLE_UK } from './lib/messages';
+import { api, logout, markConsentAccepted, post } from './lib/session';
+import AdminRegistrationsPage from './pages/AdminRegistrationsPage';
+import LoginPage from './pages/LoginPage';
+import ProfilePage from './pages/ProfilePage';
+import RegisterPage from './pages/RegisterPage';
+import SystemPage from './pages/SystemPage';
+import { RegistrationClarificationPage, VerifyEmailPage } from './pages/TokenPages';
 
-type Health = {
-  status: string;
-  version: string;
-  env: string;
-  started_at: string;
-  uptime_s: number;
-  db: { status: string; latency_ms?: number; server_version?: string; error?: string };
-};
+function WakeBanner() {
+  const [wake, setWake] = useState<WakeProgress | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    // Render Free засинає після 15 хв простою; перший запит «будить» сервер (нотатки, розд. 6)
+    const timer = setTimeout(() => setWake({ attempt: 1, elapsedMs: 3000 }), 3000);
+    fetchWithWake('/api/health', { onProgress: (p) => p.elapsedMs > 2500 && setWake(p) })
+      .catch(() => setFailed(true))
+      .finally(() => {
+        clearTimeout(timer);
+        setWake(null);
+      });
+    return () => clearTimeout(timer);
+  }, []);
+  if (failed) return <div className="banner error">Сервер недоступний. Спробуйте оновити сторінку за хвилину.</div>;
+  if (!wake) return null;
+  return (
+    <div className="banner">
+      Сервер прокидається після простою (безкоштовний хостинг), це триває до хвилини… {Math.round(wake.elapsedMs / 1000)}{' '}
+      с
+    </div>
+  );
+}
 
-type Check = { ok: boolean | null; text: string };
-const pending: Check = { ok: null, text: 'не перевірено' };
+function ConsentModal() {
+  const { user, consentRequired } = useAuth();
+  const [consent, setConsent] = useState<{ text_version: string; text: string } | null>(null);
+  useEffect(() => {
+    if (consentRequired) void api<{ text_version: string; text: string }>('/auth/consent').then(setConsent);
+  }, [consentRequired]);
+  if (!user || !consentRequired || !consent) return null;
+  // UC-03 AC2: текст згоди змінено — показати нову версію (DG-10)
+  return (
+    <div className="modal" role="dialog" aria-modal="true">
+      <div className="modal-body">
+        <h2>Оновлено текст згоди (версія {consent.text_version})</h2>
+        <pre className="consent-text">{consent.text}</pre>
+        <button onClick={() => void post('/me/consent', { text_version: consent.text_version }).then(markConsentAccepted)}>
+          Приймаю
+        </button>{' '}
+        <Link to="/profile">Не приймаю — перейти до видалення облікового запису</Link>
+      </div>
+    </div>
+  );
+}
 
-function Mark({ ok }: { ok: boolean | null }) {
-  return <span className="mark">{ok === null ? '⏳' : ok ? '✅' : '❌'}</span>;
+function Nav() {
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  return (
+    <header className="nav">
+      <Link to="/" className="brand">
+        GEDH
+      </Link>
+      <nav>
+        {user?.role === 'ADMIN' && <NavLink to="/admin/registrations">Заявки на реєстрацію</NavLink>}
+        {user && <NavLink to="/profile">Профіль</NavLink>}
+        <NavLink to="/system">Стан системи</NavLink>
+      </nav>
+      <div className="who">
+        {user ? (
+          <>
+            {user.full_name} · {ROLE_UK[user.role]}{' '}
+            <button
+              onClick={() => {
+                navigate('/'); // спершу йдемо з захищеної сторінки, потім завершуємо сесію
+                void logout();
+              }}
+            >
+              Вийти
+            </button>
+          </>
+        ) : (
+          <>
+            <NavLink to="/login">Увійти</NavLink> · <NavLink to="/register">Реєстрація</NavLink>
+          </>
+        )}
+      </div>
+    </header>
+  );
+}
+
+function HomePage() {
+  const { user } = useAuth();
+  const notice = (useLocation().state as { notice?: string } | null)?.notice;
+  return (
+    <section>
+      {notice && <p className="ok">{notice}</p>}
+      <h1>Global Economic Data Hub</h1>
+      <p>
+        Платформа керованого обміну макроекономічними даними: відкриті показники World Bank, IMF і BIS для 25 країн та
+        закриті набори постачальників, доступні лише за погодженою заявкою й угодою.
+      </p>
+      <p className="hint">
+        Навчальний проєкт групи ОІ-34. Закриті набори на платформі — <strong>синтетичні дані</strong>, не офіційна
+        статистика.
+      </p>
+      {!user && (
+        <p>
+          <Link to="/register">Зареєструватися</Link> або <Link to="/login">увійти</Link>.
+        </p>
+      )}
+      <p className="hint">Карта, каталог і профілі країн з'являться на наступних етапах.</p>
+    </section>
+  );
 }
 
 export default function App() {
-  const [wake, setWake] = useState<WakeProgress | null>(null);
-  const [health, setHealth] = useState<Health | null>(null);
-  const [healthCheck, setHealthCheck] = useState<Check>({ ok: null, text: 'з’єднання з сервером…' });
-  const [cookie, setCookie] = useState<Check>(pending);
-  const [headers, setHeaders] = useState<unknown>(null);
-  const [upload, setUpload] = useState<Check>(pending);
-
-  function recheckHealth() {
-    setHealth(null);
-    setHealthCheck({ ok: null, text: 'з’єднання з сервером…' });
-    void checkHealth();
-  }
-
-  async function checkHealth() {
-    const started = Date.now();
-    try {
-      const res = await fetchWithWake('/api/health', { onProgress: setWake });
-      const body = (await res.json()) as Health;
-      setHealth(body);
-      const seconds = ((Date.now() - started) / 1000).toFixed(1);
-      setHealthCheck({ ok: res.ok, text: `сервер відповів за ${seconds} с` });
-    } catch (err) {
-      setHealthCheck({ ok: false, text: `сервер недоступний: ${String(err)}` });
-    } finally {
-      setWake(null);
-    }
-  }
-
-  async function checkCookie() {
-    setCookie(pending);
-    try {
-      const { set } = await getJson<{ set: string }>('/api/diag/cookie', { method: 'POST' });
-      const got = await getJson<{ received: boolean; value: string | null }>('/api/diag/cookie');
-      setCookie(
-        got.received && got.value === set
-          ? { ok: true, text: `cookie встановлено й повернуто (${set})` }
-          : { ok: false, text: `cookie не повернулося: ${JSON.stringify(got)}` },
-      );
-    } catch (err) {
-      setCookie({ ok: false, text: String(err) });
-    }
-  }
-
-  async function checkHeaders() {
-    try {
-      setHeaders(await getJson('/api/diag/request'));
-    } catch (err) {
-      setHeaders(String(err));
-    }
-  }
-
-  async function sendFile(file: Blob, name: string) {
-    setUpload({ ok: null, text: `надсилаю ${name} (${(file.size / 1024 / 1024).toFixed(2)} МБ)…` });
-    const started = Date.now();
-    try {
-      const localHash = await sha256Hex(await file.arrayBuffer());
-      const form = new FormData();
-      form.append('file', file, name);
-      const res = await getJson<{ size: number; sha256: string }>('/api/diag/upload', {
-        method: 'POST',
-        body: form,
-      });
-      const seconds = ((Date.now() - started) / 1000).toFixed(1);
-      const same = res.sha256 === localHash && res.size === file.size;
-      setUpload({
-        ok: same,
-        text: same
-          ? `файл дійшов цілим: ${res.size} байт за ${seconds} с, SHA-256 збігається`
-          : `файл пошкоджено: сервер отримав ${res.size} байт, хеш ${res.sha256}`,
-      });
-    } catch (err) {
-      const rejected = String(err).includes('FILE_TOO_LARGE');
-      setUpload({
-        ok: rejected && file.size > 5 * 1024 * 1024,
-        text: rejected ? `${name}: сервер відмовив — файл понад 5 МБ (FILE_TOO_LARGE)` : `${name}: ${String(err)}`,
-      });
-    }
-  }
-
-  function sendGenerated(bytes: number) {
-    const data = new Uint8Array(bytes);
-    for (let i = 0; i < bytes; i++) data[i] = 32 + (i % 90);
-    void sendFile(new Blob([data], { type: 'text/csv' }), `test_${bytes}.csv`);
-  }
-
-  useEffect(() => {
-    void checkHealth();
-  }, []);
-
   return (
-    <main>
-      <h1>GEDH — перевірка системи (етап Е0)</h1>
-      <p>
-        Сторінка перевіряє ланцюжок браузер → Vercel → Render → Neon. Дизайн сайту буде пізніше.
-      </p>
-
-      <section>
-        <h2>
-          <Mark ok={healthCheck.ok} /> 1. Сервер і база даних
-        </h2>
-        <p>{healthCheck.text}</p>
-        {wake && (
-          <p className="warn">
-            Сервер прокидається (безкоштовний тариф засинає після 15 хв простою): спроба {wake.attempt}, минуло{' '}
-            {Math.round(wake.elapsedMs / 1000)} с…
-          </p>
-        )}
-        {health && (
-          <ul>
-            <li>
-              версія API: {health.version}, середовище: {health.env}
-            </li>
-            <li>
-              сервер працює {health.uptime_s} с (мале значення = щойно був холодний старт)
-            </li>
-            <li>
-              <Mark ok={health.db.status === 'ok'} /> база даних: {health.db.status}
-              {health.db.server_version && `, PostgreSQL ${health.db.server_version}`}
-              {health.db.latency_ms !== undefined && `, ${health.db.latency_ms} мс`}
-              {health.db.error && `, помилка ${health.db.error}`}
-            </li>
-          </ul>
-        )}
-        <button onClick={recheckHealth}>Перевірити ще раз</button>
-      </section>
-
-      <section>
-        <h2>
-          <Mark ok={cookie.ok} /> 2. Cookie через проксі
-        </h2>
-        <p>Майбутній токен оновлення зберігатиметься в httpOnly cookie — він має доходити до API.</p>
-        <p>{cookie.text}</p>
-        <button onClick={checkCookie}>Перевірити cookie</button>
-      </section>
-
-      <section>
-        <h2>3. Заголовки запиту на сервері</h2>
-        <p>Звідси видно, у якому заголовку приходить реальна IP-адреса клієнта.</p>
-        <button onClick={checkHeaders}>Показати</button>
-        {headers !== null && <pre>{JSON.stringify(headers, null, 2)}</pre>}
-      </section>
-
-      <section>
-        <h2>
-          <Mark ok={upload.ok} /> 4. Завантаження файлу
-        </h2>
-        <p>Набір даних може мати до 5 МБ — файл має пройти через проксі без змін.</p>
-        <p>{upload.text}</p>
-        <button onClick={() => sendGenerated(100 * 1024)}>100 КБ</button>{' '}
-        <button onClick={() => sendGenerated(5 * 1024 * 1024 - 1024)}>майже 5 МБ</button>{' '}
-        <button onClick={() => sendGenerated(5 * 1024 * 1024 + 1)}>понад 5 МБ (має бути відмова)</button>{' '}
-        <label>
-          або свій файл:{' '}
-          <input type="file" onChange={(e) => e.target.files?.[0] && sendFile(e.target.files[0], e.target.files[0].name)} />
-        </label>
-      </section>
-    </main>
+    <>
+      <WakeBanner />
+      <Nav />
+      <ConsentModal />
+      <main>
+        <Routes>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
+          <Route path="/verify-email" element={<VerifyEmailPage />} />
+          <Route path="/registration-clarification" element={<RegistrationClarificationPage />} />
+          <Route
+            path="/profile"
+            element={
+              <RequireAuth>
+                <ProfilePage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/admin/registrations"
+            element={
+              <RequireAuth roles={['ADMIN']}>
+                <AdminRegistrationsPage />
+              </RequireAuth>
+            }
+          />
+          <Route path="/system" element={<SystemPage />} />
+          <Route path="*" element={<p>Сторінку не знайдено.</p>} />
+        </Routes>
+      </main>
+    </>
   );
 }

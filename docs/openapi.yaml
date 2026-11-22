@@ -35,7 +35,7 @@ servers:
   - url: https://gedh.vercel.app/api
     description: публічний сайт (Vercel → Render)
   - url: http://localhost:5173/api
-    description: локальна розробка (проксі Vite → uvicorn :8000)
+    description: локальна розробка (проксі Vite → uvicorn :8010)
 
 tags:
   - name: service

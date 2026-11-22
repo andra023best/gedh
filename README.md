@@ -30,7 +30,7 @@ Backend (PowerShell, з папки `backend`):
 python -m venv .venv
 .\.venv\Scripts\python -m pip install -r requirements-dev.txt
 copy .env.example .env
-.\.venv\Scripts\python -m uvicorn app.main:app --reload --port 8000
+.\.venv\Scripts\python -m uvicorn app.main:app --reload --port 8010
 ```
 
 Frontend (з папки `frontend`, в іншому терміналі):
@@ -40,7 +40,7 @@ npm install
 npm run dev
 ```
 
-Сайт відкривається на http://localhost:5173, документація API — на http://localhost:8000/api/docs.
+Сайт відкривається на http://localhost:5173, документація API — на http://localhost:8010/api/docs.
 
 ## Перевірки
 
