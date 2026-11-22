@@ -136,14 +136,14 @@ def evaluate(
             if old not in (None, 0) and abs(r.value - old) / abs(old) > 0.20:
                 add(Issue("Q-08", Severity.WARNING, ref, f"Перегляд значення: було {old}, стало {r.value}"))
 
-    for (country, indicator, _), series in by_series.items():
+    for (country, indicator, breakdown), series in by_series.items():
         rules = indicators[indicator]
         step = {Frequency.ANNUAL: 12, Frequency.QUARTERLY: 3, Frequency.MONTHLY: 1}[rules.frequency]
         starts = sorted(r.period_start for r in series)
         span = (starts[-1].year - starts[0].year) * 12 + starts[-1].month - starts[0].month
         expected = span // step + 1
         missing = expected - len([r for r in series if r.value is not None])
-        ref = f"{country}/{indicator}"
+        ref = f"{country}/{indicator}" + (f"/{breakdown}" if breakdown else "")
         # Q-09 пропуски не більше 30 % періоду
         if expected > 0 and missing / expected > 0.30:
             add(Issue("Q-09", Severity.WARNING, ref, f"Пропущено {missing} з {expected} періодів"))

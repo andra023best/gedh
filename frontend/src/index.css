@@ -161,3 +161,13 @@ table.data td.num {
 .synthetic {
   color: #8a5a00;
 }
+button.link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: #1f4e79;
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}

@@ -131,6 +131,17 @@ export function ProviderPage() {
   const [busy, setBusy] = useState(false);
   const [comment, setComment] = useState('');
 
+  // Відкрити будь-яку версію: DQ-звіт, причина відхилення; для карантину — підтвердження попереджень пізніше
+  async function openVersion(id: string) {
+    setError(null);
+    try {
+      setResult(await api<Version>(`/dataset-versions/${id}`));
+      setTimeout(() => document.getElementById('version-report')?.scrollIntoView({ behavior: 'smooth' }), 0);
+    } catch (err) {
+      setError(errorText(err));
+    }
+  }
+
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
@@ -189,7 +200,9 @@ export function ProviderPage() {
                 <td>
                   {d.versions.map((v) => (
                     <div key={v.id}>
-                      v{v.version_no}: {VERSION_STATUS_UK[v.status] ?? v.status}
+                      <button type="button" className="link" onClick={() => void openVersion(v.id)}>
+                        v{v.version_no}: {VERSION_STATUS_UK[v.status] ?? v.status}
+                      </button>
                     </div>
                   ))}
                 </td>
@@ -292,7 +305,7 @@ export function ProviderPage() {
       </form>
 
       {result && (
-        <>
+        <div id="version-report">
           <VersionReport v={result} />
           {result.status === 'QUARANTINE' && (
             <div className="card">
@@ -305,7 +318,7 @@ export function ProviderPage() {
               </p>
             </div>
           )}
-        </>
+        </div>
       )}
     </section>
   );
