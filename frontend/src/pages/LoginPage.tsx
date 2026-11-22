@@ -7,7 +7,7 @@ import { login } from '../lib/session';
 export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const from = (location.state as { from?: string } | null)?.from ?? '/profile';
+  const from = (location.state as { from?: string } | null)?.from ?? '/data';
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -19,8 +19,10 @@ export default function LoginPage() {
     setError(null);
     try {
       const t = await login(email.trim(), password);
-      // Адресу адмін-розділу, запам'ятовану після виходу іншого користувача, не використовуємо для інших ролей
-      const target = t.user.role === 'ADMIN' ? '/admin/registrations' : from.startsWith('/admin') ? '/profile' : from;
+      const home: Record<string, string> = { ADMIN: '/admin/registrations', DATA_PROVIDER: '/provider', DG_OFFICER: '/dg/review' };
+      // Адресу чужого розділу, запам'ятовану після виходу іншого користувача, не використовуємо
+      const foreign = ['/admin', '/provider', '/dg'].some((p) => from.startsWith(p));
+      const target = home[t.user.role] ?? (foreign ? '/data' : from);
       navigate(target, { replace: true });
     } catch (err) {
       setError(errorText(err));

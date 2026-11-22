@@ -26,7 +26,8 @@ class Row:
         return (self.country, self.indicator, self.breakdown, self.period_start, self.period_end)
 
     def ref(self) -> str:
-        return f"{self.country}/{self.indicator}/{self.period_start.isoformat()}"
+        part = f"/{self.breakdown}" if self.breakdown else ""
+        return f"{self.country}/{self.indicator}{part}/{self.period_start.isoformat()}"
 
 
 @dataclass
@@ -68,9 +69,10 @@ class Report:
     def score(self) -> float:
         if self.total == 0:
             return 0.0
-        bad = {i.ref for i in self.critical}
-        warned = {i.ref for i in self.warnings} - bad
-        return round(100 * (self.total - len(bad) - 0.5 * len(warned)) / self.total, 1)
+        bad = min(len({i.ref for i in self.critical}), self.total)
+        warned = min(len({i.ref for i in self.warnings} - {i.ref for i in self.critical}), self.total - bad)
+        # межі 0–100 гарантовані: порушень не може бути більше, ніж записів (CHECK score_range у БД)
+        return round(100 * (self.total - bad - 0.5 * warned) / self.total, 1)
 
 
 def period_matches(freq: Frequency, start: date, end: date) -> bool:

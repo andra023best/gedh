@@ -9,6 +9,7 @@ import { ROLE_UK } from './lib/messages';
 import { api, logout, markConsentAccepted, post } from './lib/session';
 import AdminRegistrationsPage from './pages/AdminRegistrationsPage';
 import { CatalogPage, OpenDataPage } from './pages/DataPages';
+import { DgReviewPage, ProviderPage } from './pages/DatasetPages';
 import LoginPage from './pages/LoginPage';
 import ProfilePage from './pages/ProfilePage';
 import RegisterPage from './pages/RegisterPage';
@@ -72,6 +73,8 @@ function Nav() {
       <nav>
         <NavLink to="/catalog">Каталог</NavLink>
         {user && <NavLink to="/data">Дані</NavLink>}
+        {user?.role === 'DATA_PROVIDER' && <NavLink to="/provider">Мої набори</NavLink>}
+        {user?.role === 'DG_OFFICER' && <NavLink to="/dg/review">Перевірка наборів</NavLink>}
         {user?.role === 'ADMIN' && <NavLink to="/admin/registrations">Заявки на реєстрацію</NavLink>}
         {user && <NavLink to="/profile">Профіль</NavLink>}
         <NavLink to="/system">Стан системи</NavLink>
@@ -162,6 +165,22 @@ export default function App() {
             element={
               <RequireAuth>
                 <OpenDataPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/provider"
+            element={
+              <RequireAuth roles={['DATA_PROVIDER']}>
+                <ProviderPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/dg/review"
+            element={
+              <RequireAuth roles={['DG_OFFICER']}>
+                <DgReviewPage />
               </RequireAuth>
             }
           />
