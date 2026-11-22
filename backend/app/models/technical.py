@@ -27,6 +27,23 @@ class ActionToken(Base):
     used_at: Mapped[datetime | None] = tz()
 
 
+class RawPayload(Base):
+    """Сира відповідь API джерела (UC-14 крок 3).
+
+    Тіло стиснуто gzip; SHA-256 — від нестиснутих байтів; зберігається 90 днів (табл. 3.26).
+    """
+
+    __tablename__ = "raw_payloads"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("import_runs.id", ondelete="CASCADE"), unique=True)
+    sha256: Mapped[str] = mapped_column(String(64))
+    size: Mapped[int] = mapped_column(Integer)
+    body_gzip: Mapped[bytes] = mapped_column(LargeBinary)
+    fetched_at: Mapped[datetime] = created_at()
+    delete_after: Mapped[datetime] = tz(nullable=False)
+
+
 class StoredFile(Base):
     """Файл у БД (bytea) поза публічним каталогом (NFR-19) зі строком видалення (табл. 3.26)."""
 

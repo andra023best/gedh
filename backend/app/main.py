@@ -5,7 +5,7 @@ import uuid
 from fastapi import APIRouter, FastAPI, Request
 
 from app import __version__
-from app.api import admin, auth, diag, health, me, reference
+from app.api import admin, auth, data, diag, health, jobs, me, reference
 from app.core import errors
 from app.core.config import get_settings
 from app.core.proxy_guard import ProxyGuardMiddleware
@@ -26,6 +26,8 @@ def create_app() -> FastAPI:
     api.include_router(me.router)
     api.include_router(admin.router)
     api.include_router(reference.router)
+    api.include_router(data.router)
+    api.include_router(jobs.router)
     if settings.diag_enabled:
         api.include_router(diag.router)
     app.include_router(api)

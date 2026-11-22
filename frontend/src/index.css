@@ -148,3 +148,16 @@ tr.selected {
 button {
   margin: 4px 0;
 }
+.scroll {
+  overflow-x: auto;
+}
+table.data td.num {
+  text-align: right;
+  white-space: nowrap;
+}
+.na {
+  color: #888;
+}
+.synthetic {
+  color: #8a5a00;
+}

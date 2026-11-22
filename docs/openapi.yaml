@@ -761,6 +761,31 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/DatasetDetail" } } }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /coverage:
+    get:
+      tags: [reference]
+      summary: Покриття — скільки відкритих показників має дані для кожної країни (без значень)
+      description: Для карти «зелені / сірі країни» (UC-04). Публічний, не журналюється (нотатки, розд. 6).
+      operationId: getCoverage
+      security: []
+      x-roles: [GUEST]
+      x-priority: Should
+      x-fr: [FR-06, FR-07]
+      x-uc: [UC-04]
+      responses:
+        "200":
+          description: Країни з кількістю показників
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [country, indicators]
+                  properties:
+                    country: { type: string }
+                    indicators: { type: integer }
+
   # ================================================================ data
   /datasets/{id}/observations:
     parameters:
@@ -1380,6 +1405,32 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
 
   # ================================================================ internal jobs
+  /internal/jobs/import:
+    post:
+      tags: [internal]
+      summary: Імпорт відкритих даних з API джерел (щотижня)
+      description: |
+        Запускає увімкнені конектори у фоні й одразу повертає 202 (імпорт довший за тайм-аут проксі).
+        Параметр `indicator` — лише один показник. UC-14; S-22.
+      operationId: jobImport
+      security:
+        - jobToken: []
+      x-roles: [SYSTEM]
+      x-priority: Should
+      x-fr: [FR-14, FR-15, FR-16]
+      x-uc: [UC-14, UC-18]
+      x-dg: [DG-16, DG-22]
+      x-audit: DATASET_PUBLISH (для кожного запуску конектора)
+      parameters:
+        - { name: indicator, in: query, schema: { type: string } }
+      responses:
+        "202":
+          description: Імпорт запущено
+          content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } }
+        "401":
+          description: "`JOB_TOKEN_INVALID`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
   /internal/jobs/expire-grants:
     post:
       tags: [internal]

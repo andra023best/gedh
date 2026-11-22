@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.core import consent, security
 from app.core.config import get_settings
 from app.core.db import new_session
+from app.ingestion.sources import BASE_URLS, SPECS
 from app.models.datasets import DatasetVersion, Observation, OpenDataset, RestrictedDataset, SourceReference
 from app.models.enums import (
     AccountStatus,
@@ -27,7 +28,7 @@ from app.models.enums import (
     VersionStatus,
 )
 from app.models.identity import ConsentRecord, Organization, User
-from app.models.ingestion import QualityReport, QualityRule
+from app.models.ingestion import Connector, QualityReport, QualityRule
 from app.models.reference import Country, DataCategory, Indicator
 from app.seed import demo_data, reference_data
 
@@ -110,7 +111,7 @@ def seed_reference(s: Session) -> None:
         s.merge(DataCategory(code=code, name_ua=ua, name_en=en))
     for code, dim, desc, sev in reference_data.QUALITY_RULES:
         s.merge(QualityRule(code=code, dimension=dim, description=desc, severity=sev, is_active=True))
-    # Відкриті набори: по одному на показник (дані з'являться після імпорту, етап Е6)
+    # Відкриті набори: по одному на показник; дані — імпортом з API джерел (етап Е2+, S-14)
     for code, ua, en, *_, src in reference_data.OPEN_INDICATORS:
         source = reference_data.SOURCE_NAMES[src]
         s.merge(
@@ -122,6 +123,20 @@ def seed_reference(s: Session) -> None:
                 licence=LICENCES[src],
                 is_synthetic=False,
                 source_system=src,
+            )
+        )
+    s.flush()
+    # Конектор на кожен відкритий набір (Connector → target 1); назва «ДЖЕРЕЛО КОД_ПОКАЗНИКА»
+    for code, spec in SPECS.items():
+        s.merge(
+            Connector(
+                id=sid("connector", code),
+                name=f"{spec.source} {code}",
+                source_system=spec.source,
+                base_url=f"{BASE_URLS[spec.source]} ({spec.series})",
+                schedule="0 3 * * 1",  # щотижня, понеділок 03:00 UTC (концепція §4.4)
+                is_enabled=True,
+                target_dataset_id=sid("open", code),
             )
         )
 

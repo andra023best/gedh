@@ -30,3 +30,5 @@ services:
         sync: false # ключ API Brevo для листів (S-18)
       - key: MAIL_FROM
         sync: false # адреса відправника, підтверджена в Brevo
+      - key: JOB_TOKEN
+        sync: false # секрет службових задач; те саме значення — у GitHub Secrets (S-22)

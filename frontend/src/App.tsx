@@ -8,6 +8,7 @@ import { useAuth } from './lib/authContext';
 import { ROLE_UK } from './lib/messages';
 import { api, logout, markConsentAccepted, post } from './lib/session';
 import AdminRegistrationsPage from './pages/AdminRegistrationsPage';
+import { CatalogPage, OpenDataPage } from './pages/DataPages';
 import LoginPage from './pages/LoginPage';
 import ProfilePage from './pages/ProfilePage';
 import RegisterPage from './pages/RegisterPage';
@@ -69,6 +70,8 @@ function Nav() {
         GEDH
       </Link>
       <nav>
+        <NavLink to="/catalog">Каталог</NavLink>
+        {user && <NavLink to="/data">Дані</NavLink>}
         {user?.role === 'ADMIN' && <NavLink to="/admin/registrations">Заявки на реєстрацію</NavLink>}
         {user && <NavLink to="/profile">Профіль</NavLink>}
         <NavLink to="/system">Стан системи</NavLink>
@@ -116,7 +119,10 @@ function HomePage() {
           <Link to="/register">Зареєструватися</Link> або <Link to="/login">увійти</Link>.
         </p>
       )}
-      <p className="hint">Карта, каталог і профілі країн з'являться на наступних етапах.</p>
+      <p>
+        <Link to="/catalog">Каталог даних</Link> — опис усіх наборів без значень.
+      </p>
+      <p className="hint">Карта й профілі країн з'являться на наступних етапах.</p>
     </section>
   );
 }
@@ -147,6 +153,15 @@ export default function App() {
             element={
               <RequireAuth roles={['ADMIN']}>
                 <AdminRegistrationsPage />
+              </RequireAuth>
+            }
+          />
+          <Route path="/catalog" element={<CatalogPage />} />
+          <Route
+            path="/data"
+            element={
+              <RequireAuth>
+                <OpenDataPage />
               </RequireAuth>
             }
           />

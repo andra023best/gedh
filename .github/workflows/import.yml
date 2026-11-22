@@ -1,0 +1,31 @@
+# Щотижневий імпорт відкритих даних (UC-14, концепція §4.4). Секрет JOB_TOKEN — у GitHub Secrets і на Render.
+name: Import open data
+
+on:
+  schedule:
+    - cron: "0 3 * * 1" # понеділок 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      indicator:
+        description: "Лише один показник (напр. GDP_USD); порожньо — усі"
+        required: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Розбудити сервер (Render Free засинає після 15 хв)
+        run: |
+          for i in $(seq 1 12); do
+            curl -fsS --max-time 30 https://gedh.vercel.app/api/health && exit 0
+            sleep 10
+          done
+          exit 1
+      - name: Запустити імпорт
+        env:
+          JOB_TOKEN: ${{ secrets.JOB_TOKEN }}
+          INDICATOR: ${{ github.event.inputs.indicator }}
+        run: |
+          url="https://gedh.vercel.app/api/internal/jobs/import"
+          [ -n "$INDICATOR" ] && url="$url?indicator=$INDICATOR"
+          curl -fsS -X POST -H "X-Job-Token: $JOB_TOKEN" "$url"
