@@ -1,0 +1,1998 @@
+openapi: 3.1.0
+info:
+  title: GEDH API — контракт для вимог Must
+  version: 0.1.0
+  description: |
+    Контракт API платформи керованого дата-шерингу GEDH (етап Е1б, рішення S-13).
+
+    **Обсяг.** 21 функціональна вимога Must зі звіту (табл. 3.1) і кілька довідкових маршрутів,
+    без яких ці сценарії не працюють (позначено `x-priority: Should`). Решту Should/Could описуємо
+    на етапах, де їх реалізуємо.
+
+    **Позначення в кожній операції:**
+    - `x-fr`, `x-uc`, `x-dg` — вимоги, прецеденти й правила data governance зі звіту;
+    - `x-roles` — ролі, яким дозволено операцію (`GUEST` — без входу). Іншим — 403 `FORBIDDEN_ROLE`;
+    - `x-audit` — дія, яку записують у журнал аудиту (UC-17). Якщо запис у журнал не вдався,
+      уся операція скасовується (UC-17 EX1).
+
+    **Транспорт.** Усі маршрути мають префікс `/api` і доступні лише через Vercel
+    (S-08: прямі запити на Render → 403 `DIRECT_ACCESS_FORBIDDEN`, крім `/api/health`).
+
+    **Автентифікація (Q-04, NFR-14, NFR-15).**
+    - Токен доступу JWT (15 хв) — у заголовку `Authorization: Bearer …`, зберігається лише в пам'яті SPA.
+    - Токен оновлення (7 днів) — у cookie `gedh_refresh`: `HttpOnly; Secure; SameSite=Lax; Path=/api/auth`.
+    - CSRF для `/auth/refresh` і `/auth/logout`: перевірка `Origin` і подвійне подання —
+      значення cookie `gedh_csrf` (читається JS) має збігатися із заголовком `X-CSRF-Token`.
+    - Статус і роль користувача перевіряються на кожному запиті, тож деактивація діє одразу.
+
+    **Помилки.** Тіло `{"detail": "КОД", "message": "…"}`; код стабільний, текст перекладає інтерфейс
+    (NFR-22). Помилки валідації — 422 у форматі FastAPI (`detail` — масив полів).
+    Ліміт запитів (NFR-20) — 429 із заголовком `Retry-After`; IP клієнта береться лише з
+    `x-vercel-forwarded-for` (S-07).
+  license:
+    name: Навчальний проєкт ОІ-34
+servers:
+  - url: https://gedh.vercel.app/api
+    description: публічний сайт (Vercel → Render)
+  - url: http://localhost:5173/api
+    description: локальна розробка (проксі Vite → uvicorn :8000)
+
+tags:
+  - name: service
+    description: Службові маршрути
+  - name: auth
+    description: Реєстрація, підтвердження e-mail, вхід (UC-01, UC-03)
+  - name: me
+    description: Власний профіль і персональні дані (UC-21)
+  - name: admin-registrations
+    description: Розгляд заявок на реєстрацію й організації (UC-02)
+  - name: reference
+    description: Довідники й каталог без значень (UC-04 — допоміжні для Must)
+  - name: data
+    description: Перегляд і вивантаження даних з перевіркою доступу (UC-07, UC-16)
+  - name: uploads
+    description: Завантаження закритих наборів і перевірка якості (UC-12, UC-18)
+  - name: dg-review
+    description: Перевірка першоджерела й публікація DG-офіцером (UC-13)
+  - name: access-requests
+    description: Заявки на закриті дані й подвійне погодження (UC-08 – UC-10)
+  - name: agreements
+    description: Угода про обмін даними й дозволи (UC-11, UC-19)
+  - name: audit
+    description: Журнал аудиту (UC-15)
+  - name: internal
+    description: Службові задачі за розкладом (GitHub Actions cron)
+
+security:
+  - bearer: []
+
+paths:
+  # ================================================================ service
+  /health:
+    get:
+      tags: [service]
+      summary: Стан API й бази даних
+      description: Відкритий маршрут — його викликає Render і інтерфейс, щоб «розбудити» сервер.
+      operationId: health
+      security: []
+      x-roles: [GUEST]
+      responses:
+        "200":
+          description: Стан
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+
+  # ================================================================ auth
+  /auth/consent:
+    get:
+      tags: [auth]
+      summary: Чинний текст згоди на обробку персональних даних
+      operationId: getCurrentConsent
+      security: []
+      x-roles: [GUEST]
+      x-fr: [FR-01]
+      x-dg: [DG-09, DG-10]
+      responses:
+        "200":
+          description: Текст і версія
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConsentText" }
+
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Зареєструвати обліковий запис
+      description: |
+        Створює користувача зі статусом `PENDING_EMAIL`, запис згоди (версія тексту, час, IP) і заявку
+        на реєстрацію; надсилає лист із посиланням підтвердження (дійсне 24 год).
+
+        **Захист від перебору e-mail (UC-01 EX1):** якщо e-mail уже зареєстровано, відповідь та сама (202),
+        а власнику адреси надсилається лист із пропозицією відновити пароль.
+
+        Для типу `ORGANIZATION_MEMBER` потрібен e-mail на домені обраної організації **або** документ
+        (PDF, PNG, JPEG ≤ 2 МБ; перевірка за сигнатурою файлу, NFR-19) — UC-01 AC1.
+      operationId: register
+      security: []
+      x-roles: [GUEST]
+      x-fr: [FR-01, FR-02, FR-04]
+      x-uc: [UC-01]
+      x-dg: [DG-09, DG-10]
+      x-audit: CONSENT_CHANGE
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { $ref: "#/components/schemas/RegistrationForm" }
+            encoding:
+              verification_document:
+                contentType: application/pdf, image/png, image/jpeg
+      responses:
+        "202":
+          description: Прийнято; перевірте пошту
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Message" }
+        "400":
+          description: "`CONSENT_REQUIRED` — згоду не надано (UC-01 EX2); `CONSENT_VERSION_OUTDATED` — текст згоди змінився"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "413": { $ref: "#/components/responses/FileTooLarge" }
+        "415":
+          description: "`UNSUPPORTED_FILE_TYPE` — документ не PDF / PNG / JPEG"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "422": { $ref: "#/components/responses/ValidationError" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /auth/verify-email:
+    post:
+      tags: [auth]
+      summary: Підтвердити e-mail за одноразовим токеном з листа
+      description: Статус `PENDING_EMAIL` → `PENDING_REVIEW`; заявка потрапляє в чергу адміністратора (FR-02).
+      operationId: verifyEmail
+      security: []
+      x-roles: [GUEST]
+      x-fr: [FR-02]
+      x-uc: [UC-01]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TokenBody" }
+      responses:
+        "200":
+          description: E-mail підтверджено
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Message" }
+        "400":
+          description: "`TOKEN_INVALID` — токен не існує або вже використаний"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "410":
+          description: "`TOKEN_EXPIRED` — минуло 24 год (UC-01 EX3); можна надіслати новий лист"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /auth/resend-verification:
+    post:
+      tags: [auth]
+      summary: Надіслати лист підтвердження повторно
+      description: Відповідь завжди 202, незалежно від того, чи існує адреса.
+      operationId: resendVerification
+      security: []
+      x-roles: [GUEST]
+      x-uc: [UC-01]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "202":
+          description: Якщо адреса очікує підтвердження, лист надіслано
+          content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /auth/registration-clarification/{token}:
+    parameters:
+      - $ref: "#/components/parameters/PathToken"
+    get:
+      tags: [auth]
+      summary: Запит адміністратора на уточнення заявки (за посиланням з листа)
+      description: Одноразове посилання, дійсне 7 днів; вхід не потрібен (UC-02 AC1).
+      operationId: getRegistrationClarification
+      security: []
+      x-roles: [GUEST]
+      x-uc: [UC-02]
+      responses:
+        "200":
+          description: Питання адміністратора
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [note, expires_at]
+                properties:
+                  note: { type: string }
+                  expires_at: { type: string, format: date-time }
+        "410":
+          description: "`TOKEN_EXPIRED`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    post:
+      tags: [auth]
+      summary: Відповісти на уточнення
+      description: Заявка повертається в чергу адміністратора (`NEEDS_CLARIFICATION` → `PENDING`).
+      operationId: answerRegistrationClarification
+      security: []
+      x-roles: [GUEST]
+      x-uc: [UC-02]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [answer]
+              properties:
+                answer: { type: string, maxLength: 2000 }
+                verification_document: { type: string, format: binary, description: "PDF/PNG/JPEG ≤ 2 МБ" }
+      responses:
+        "200":
+          description: Відповідь прийнято
+          content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } }
+        "410":
+          description: "`TOKEN_EXPIRED`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Увійти за e-mail і паролем
+      description: |
+        Повертає токен доступу; токен оновлення — у cookie `gedh_refresh`, CSRF-значення — у cookie `gedh_csrf`.
+        Повідомлення про помилку однакове для невірного e-mail і пароля (UC-03 EX1).
+        Після 5 невдалих спроб вхід блокується на 15 хв (лічильник у БД, `User.failedLoginCount`).
+      operationId: login
+      security: []
+      x-roles: [GUEST]
+      x-fr: [FR-05]
+      x-uc: [UC-03]
+      x-audit: LOGIN / LOGIN_FAILED
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        "200":
+          description: Вхід виконано
+          headers:
+            Set-Cookie:
+              description: "`gedh_refresh` (HttpOnly) і `gedh_csrf`"
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenResponse" }
+        "401":
+          description: "`INVALID_CREDENTIALS`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "403":
+          description: "`ACCOUNT_NOT_ACTIVE` — обліковий запис очікує підтвердження чи розгляду, відхилений або деактивований; поле `status` (UC-03 EX2)"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "423":
+          description: "`ACCOUNT_LOCKED` — забагато спроб; `retry_after` у секундах"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /auth/refresh:
+    post:
+      tags: [auth]
+      summary: Оновити токен доступу
+      description: Ротація токена оновлення — старий відкликається (Session.revokedAt). Потрібен `X-CSRF-Token`.
+      operationId: refresh
+      security:
+        - refreshCookie: []
+      x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-fr: [FR-05]
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "200":
+          description: Новий токен доступу
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenResponse" }
+        "401":
+          description: "`SESSION_EXPIRED` або `SESSION_REVOKED`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "403":
+          description: "`CSRF_FAILED`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Вийти (відкликати сесію)
+      operationId: logout
+      security:
+        - refreshCookie: []
+      x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      parameters:
+        - $ref: "#/components/parameters/CsrfHeader"
+      responses:
+        "204":
+          description: Сесію відкликано, cookie видалено
+
+  # ================================================================ me
+  /me:
+    get:
+      tags: [me]
+      summary: Мій профіль і що про мене зберігається
+      description: Дані, мета й терміни зберігання (табл. 3.26), прийнята версія згоди, організація (UC-21 крок 2).
+      operationId: getMe
+      x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-fr: [FR-34]
+      x-uc: [UC-21]
+      responses:
+        "200":
+          description: Профіль
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      tags: [me]
+      summary: Виправити власні персональні дані
+      description: Лише ПІБ і посада. Зміну організації описано на пізнішому етапі (UC-21 крок 4, DG-12).
+      operationId: updateMe
+      x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-fr: [FR-34]
+      x-uc: [UC-21]
+      x-audit: CONFIG_CHANGE (старе й нове значення без ПД — лише назви полів)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                full_name: { type: string, minLength: 2, maxLength: 200 }
+                position: { type: [string, "null"], maxLength: 200 }
+      responses:
+        "200":
+          description: Оновлений профіль
+          content: { application/json: { schema: { $ref: "#/components/schemas/Me" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /me/consent:
+    post:
+      tags: [me]
+      summary: Прийняти нову версію згоди (після зміни тексту)
+      description: Після входу з'являється модальне вікно, якщо прийнята версія ≠ чинної (UC-03 AC2).
+      operationId: acceptConsent
+      x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-fr: [FR-01]
+      x-uc: [UC-03]
+      x-dg: [DG-10]
+      x-audit: CONSENT_CHANGE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text_version]
+              properties:
+                text_version: { type: string, example: "1.0" }
+      responses:
+        "201":
+          description: Новий запис згоди (записи не змінюються — лише додаються)
+          content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } }
+        "400":
+          description: "`CONSENT_VERSION_OUTDATED`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /me/delete:
+    post:
+      tags: [me]
+      summary: Видалити обліковий запис або відкликати згоду
+      description: |
+        UC-21 AC2. Користувач підтверджує паролем і підтверджує видалення даних, отриманих за **усіма**
+        дозволами (завершеними й чинними, DG-12). В одній транзакції: чинні дозволи завершуються з датою
+        підтвердження видалення, обліковий запис деактивується (`DEACTIVATED`); через 30 днів ПД
+        анонімізуються (DG-24).
+      operationId: deleteMe
+      x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-fr: [FR-42]
+      x-uc: [UC-21]
+      x-dg: [DG-12, DG-24]
+      x-audit: ACCOUNT_DELETE (+ CONSENT_CHANGE, якщо reason = WITHDRAW_CONSENT)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password, reason, confirm_data_deletion]
+              properties:
+                password: { type: string, format: password }
+                reason: { type: string, enum: [DELETE_ACCOUNT, WITHDRAW_CONSENT] }
+                confirm_data_deletion:
+                  type: boolean
+                  const: true
+                  description: Підтверджую, що видалив дані, отримані за всіма дозволами
+      responses:
+        "202":
+          description: Обліковий запис деактивовано; анонімізація — через 30 днів
+          content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: "`PASSWORD_INCORRECT` (UC-21 EX1)"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "409":
+          description: "`PROVIDER_HAS_ACTIVE_GRANTS` — на набори постачальника є чинні дозволи (UC-21 EX2)"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  # ================================================================ admin: registrations
+  /admin/registrations:
+    get:
+      tags: [admin-registrations]
+      summary: Черга заявок на реєстрацію
+      operationId: listRegistrations
+      x-roles: [ADMIN]
+      x-fr: [FR-03]
+      x-uc: [UC-02]
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/ReviewStatus" }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Заявки
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/Registration" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /admin/registrations/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [admin-registrations]
+      summary: Заявка на реєстрацію з даними заявника
+      operationId: getRegistration
+      x-roles: [ADMIN]
+      x-fr: [FR-03, FR-04]
+      x-uc: [UC-02]
+      responses:
+        "200":
+          description: Заявка
+          content: { application/json: { schema: { $ref: "#/components/schemas/Registration" } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /admin/registrations/{id}/document:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [admin-registrations]
+      summary: Документ, що підтверджує працевлаштування
+      description: "Відповідь з `Content-Disposition: attachment` і `X-Content-Type-Options: nosniff`."
+      operationId: getRegistrationDocument
+      x-roles: [ADMIN]
+      x-fr: [FR-04]
+      x-uc: [UC-02]
+      responses:
+        "200":
+          description: Файл
+          content:
+            application/pdf: { schema: { type: string, format: binary } }
+            image/png: { schema: { type: string, format: binary } }
+            image/jpeg: { schema: { type: string, format: binary } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /admin/registrations/{id}/approve:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [admin-registrations]
+      summary: Схвалити заявку з призначенням ролі
+      description: |
+        Роль: `ANALYST`, `ORG_REPRESENTATIVE` або `DATA_PROVIDER`. Для двох останніх — верифікована організація
+        (FR-04). Адміністратор не може розглядати власну заявку (UC-02 EX2, D-01).
+      operationId: approveRegistration
+      x-roles: [ADMIN]
+      x-fr: [FR-03, FR-04]
+      x-uc: [UC-02]
+      x-dg: [DG-07]
+      x-audit: REGISTRATION_DECISION
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              properties:
+                role: { type: string, enum: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER] }
+                organization_id:
+                  type: [string, "null"]
+                  format: uuid
+                  description: Обов'язкове для ORG_REPRESENTATIVE і DATA_PROVIDER
+      responses:
+        "200":
+          description: Обліковий запис активовано, заявнику надіслано лист
+          content: { application/json: { schema: { $ref: "#/components/schemas/Registration" } } }
+        "403":
+          description: "`SELF_REVIEW_FORBIDDEN`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "409":
+          description: "`INVALID_STATE` — заявка вже розглянута; `ORGANIZATION_NOT_VERIFIED`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /admin/registrations/{id}/reject:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [admin-registrations]
+      summary: Відхилити заявку з обов'язковою причиною
+      operationId: rejectRegistration
+      x-roles: [ADMIN]
+      x-fr: [FR-03]
+      x-uc: [UC-02]
+      x-audit: REGISTRATION_DECISION
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReasonBody" }
+      responses:
+        "200":
+          description: Відхилено, заявника повідомлено
+          content: { application/json: { schema: { $ref: "#/components/schemas/Registration" } } }
+        "403":
+          description: "`SELF_REVIEW_FORBIDDEN`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "409": { $ref: "#/components/responses/InvalidState" }
+
+  /admin/registrations/{id}/clarify:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [admin-registrations]
+      summary: Запитати уточнення в заявника
+      description: Статус `NEEDS_CLARIFICATION`; заявнику надсилається одноразове посилання (7 днів).
+      operationId: clarifyRegistration
+      x-roles: [ADMIN]
+      x-uc: [UC-02]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [note]
+              properties:
+                note: { type: string, minLength: 5, maxLength: 2000 }
+      responses:
+        "200":
+          description: Запит надіслано
+          content: { application/json: { schema: { $ref: "#/components/schemas/Registration" } } }
+        "409": { $ref: "#/components/responses/InvalidState" }
+
+  /admin/organizations:
+    get:
+      tags: [admin-registrations]
+      summary: Організації (зокрема неверифіковані)
+      operationId: listOrganizationsAdmin
+      x-roles: [ADMIN]
+      x-fr: [FR-04]
+      responses:
+        "200":
+          description: Список
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Organization" }
+    post:
+      tags: [admin-registrations]
+      summary: Створити й одразу верифікувати організацію
+      description: Якщо організації немає в довіднику (UC-02 AC2).
+      operationId: createOrganization
+      x-roles: [ADMIN]
+      x-fr: [FR-04]
+      x-uc: [UC-02]
+      x-audit: CONFIG_CHANGE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrganizationCreate" }
+      responses:
+        "201":
+          description: Створено (статус VERIFIED)
+          content: { application/json: { schema: { $ref: "#/components/schemas/Organization" } } }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /admin/organizations/{id}/verify:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [admin-registrations]
+      summary: Верифікувати організацію
+      operationId: verifyOrganization
+      x-roles: [ADMIN]
+      x-fr: [FR-04]
+      x-audit: CONFIG_CHANGE
+      responses:
+        "200":
+          description: Верифіковано
+          content: { application/json: { schema: { $ref: "#/components/schemas/Organization" } } }
+        "409": { $ref: "#/components/responses/InvalidState" }
+
+  # ================================================================ reference (допоміжні)
+  /organizations:
+    get:
+      tags: [reference]
+      summary: Верифіковані організації (для форми реєстрації)
+      operationId: listVerifiedOrganizations
+      security: []
+      x-roles: [GUEST]
+      x-priority: Should
+      x-fr: [FR-01]
+      responses:
+        "200":
+          description: Лише id, назва, тип, країна (без доменів e-mail)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/OrganizationPublic" }
+
+  /countries:
+    get:
+      tags: [reference]
+      summary: Довідник країн
+      operationId: listCountries
+      security: []
+      x-roles: [GUEST]
+      x-priority: Should
+      responses:
+        "200":
+          description: Країни
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Country" }
+
+  /categories:
+    get:
+      tags: [reference]
+      summary: Категорії закритих даних
+      operationId: listCategories
+      security: []
+      x-roles: [GUEST]
+      x-priority: Should
+      responses:
+        "200":
+          description: Категорії
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Category" }
+
+  /indicators:
+    get:
+      tags: [reference]
+      summary: Довідник показників
+      operationId: listIndicators
+      security: []
+      x-roles: [GUEST]
+      x-priority: Should
+      responses:
+        "200":
+          description: Показники
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Indicator" }
+
+  /catalog/datasets:
+    get:
+      tags: [reference]
+      summary: Каталог наборів — лише метадані, без значень
+      description: Закриті набори позначено `is_synthetic` і «доступ за заявкою» (FR-27, UC-05 AC2).
+      operationId: listDatasets
+      security: []
+      x-roles: [GUEST]
+      x-priority: Should
+      x-fr: [FR-09, FR-27]
+      x-dg: [DG-04, DG-13]
+      parameters:
+        - { name: country, in: query, schema: { type: string, pattern: "^[A-Z]{3}$" } }
+        - { name: category, in: query, schema: { type: string } }
+        - { name: kind, in: query, schema: { type: string, enum: [OPEN, RESTRICTED] } }
+      responses:
+        "200":
+          description: Набори
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/DatasetSummary" }
+
+  /catalog/datasets/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [reference]
+      summary: Метадані набору й опубліковані версії
+      operationId: getDataset
+      security: []
+      x-roles: [GUEST]
+      x-priority: Should
+      x-fr: [FR-09, FR-27]
+      responses:
+        "200":
+          description: Набір
+          content: { application/json: { schema: { $ref: "#/components/schemas/DatasetDetail" } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ================================================================ data
+  /datasets/{id}/observations:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [data]
+      summary: Значення набору (перегляд) з перевіркою доступу
+      description: |
+        Перевірка доступу (UC-16) на **кожному** запиті:
+        - відкритий набір — активний обліковий запис;
+        - закритий — чинний дозвіл на країну × категорію × період (`AccessGrant.covers`), або власник-постачальник,
+          або DG-офіцер для версії на перевірці.
+        Якщо дозвіл покриває лише частину періоду, повертається покрита частина і `coverage: PARTIAL` (UC-16 AC1).
+      operationId: getObservations
+      x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-fr: [FR-26, FR-27]
+      x-uc: [UC-16]
+      x-dg: [DG-03, DG-05]
+      x-audit: DATA_VIEW (результат SUCCESS або DENIED)
+      parameters:
+        - $ref: "#/components/parameters/PeriodFrom"
+        - $ref: "#/components/parameters/PeriodTo"
+        - { name: countries, in: query, description: "Лише для відкритих наборів, через кому", schema: { type: string } }
+        - { name: version, in: query, description: "Номер версії (за замовчуванням — чинна)", schema: { type: integer, minimum: 1 } }
+      responses:
+        "200":
+          description: Значення
+          content: { application/json: { schema: { $ref: "#/components/schemas/ObservationsResponse" } } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AccessDenied" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /datasets/{id}/export:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [data]
+      summary: Вивантажити дані у CSV або JSON
+      description: |
+        Та сама перевірка доступу, що й для перегляду (UC-16). Файл містить метадані (джерело, версія, дата),
+        для закритих наборів — ідентифікатор дозволу й позначку «СИНТЕТИЧНІ ДАНІ» (FR-27, DG-04).
+        SHA-256 файлу — у заголовку `X-Content-SHA256` і в журналі аудиту (FR-11).
+        CSV: значення, що починаються з `= + - @`, екрануються (захист від CSV injection).
+      operationId: exportDataset
+      x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-fr: [FR-11, FR-26, FR-27]
+      x-uc: [UC-07, UC-16]
+      x-dg: [DG-04, DG-05]
+      x-audit: DATA_DOWNLOAD (хеш файлу, id дозволу)
+      parameters:
+        - name: format
+          in: query
+          required: true
+          schema: { type: string, enum: [csv, json] }
+        - $ref: "#/components/parameters/PeriodFrom"
+        - $ref: "#/components/parameters/PeriodTo"
+        - { name: countries, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: "Файл (`Content-Disposition: attachment`)"
+          headers:
+            X-Content-SHA256: { description: "SHA-256 тіла відповіді", schema: { type: string } }
+            X-Grant-Id: { description: "Дозвіл, за яким видано закриті дані", schema: { type: string, format: uuid } }
+            X-Coverage: { description: "FULL або PARTIAL", schema: { type: string } }
+          content:
+            text/csv: { schema: { type: string } }
+            application/json: { schema: { $ref: "#/components/schemas/ExportFile" } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/AccessDenied" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  # ================================================================ uploads
+  /templates/upload.csv:
+    get:
+      tags: [uploads]
+      summary: CSV-шаблон завантаження
+      description: "Колонки: country, indicator, breakdown, period, value, note (UTF-8)."
+      operationId: getCsvTemplate
+      security: []
+      x-roles: [GUEST]
+      x-fr: [FR-21]
+      responses:
+        "200":
+          description: Шаблон
+          content: { text/csv: { schema: { type: string } } }
+
+  /templates/upload.schema.json:
+    get:
+      tags: [uploads]
+      summary: JSON Schema шаблону (правило Q-01)
+      operationId: getJsonSchemaTemplate
+      security: []
+      x-roles: [GUEST]
+      x-fr: [FR-21, FR-22]
+      responses:
+        "200":
+          description: JSON Schema
+          content: { application/schema+json: { schema: { type: object } } }
+
+  /provider/datasets:
+    get:
+      tags: [uploads]
+      summary: Набори моєї організації з версіями й статусами
+      operationId: listProviderDatasets
+      x-roles: [DATA_PROVIDER]
+      x-fr: [FR-21]
+      x-uc: [UC-12]
+      responses:
+        "200":
+          description: Набори
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/DatasetDetail" }
+
+  /provider/uploads:
+    post:
+      tags: [uploads]
+      summary: Завантажити закритий набір (нову версію)
+      description: |
+        Країна береться з організації постачальника. Без першоджерела файл не приймається (Q-11, DG-06).
+        Система: SHA-256 → карантин → перевірка якості Q-01 – Q-11 (UC-18) → DQ-звіт.
+        - критичні порушення → версія `REJECTED` (201 з DQ-звітом, UC-12 EX2);
+        - лише попередження → `QUARANTINE`, потрібне підтвердження (`/confirm-warnings`);
+        - без порушень → `PENDING_REVIEW` (черга DG-офіцера).
+      operationId: uploadDataset
+      x-roles: [DATA_PROVIDER]
+      x-fr: [FR-21, FR-22]
+      x-uc: [UC-12, UC-18]
+      x-dg: [DG-06, DG-20, DG-21]
+      x-audit: DATASET_UPLOAD (хеш файлу)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: { $ref: "#/components/schemas/UploadForm" }
+      responses:
+        "201":
+          description: Версію створено; статус і DQ-звіт у відповіді
+          content: { application/json: { schema: { $ref: "#/components/schemas/DatasetVersion" } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409":
+          description: "`DUPLICATE_FILE` — файл з таким SHA-256 уже завантажено (UC-12 EX3)"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "413": { $ref: "#/components/responses/FileTooLarge" }
+        "415":
+          description: "`UNSUPPORTED_FILE_TYPE` — не CSV чи JSON"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "422":
+          description: "`SOURCE_REQUIRED` (UC-12 EX1) або помилки полів форми"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /dataset-versions/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [uploads]
+      summary: Версія набору з першоджерелом і DQ-звітом
+      description: Бачать постачальник-власник, DG-офіцер, адміністратор.
+      operationId: getDatasetVersion
+      x-roles: [DATA_PROVIDER, DG_OFFICER, ADMIN]
+      x-fr: [FR-22, FR-23]
+      x-uc: [UC-12, UC-13]
+      responses:
+        "200":
+          description: Версія
+          content: { application/json: { schema: { $ref: "#/components/schemas/DatasetVersion" } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /dataset-versions/{id}/confirm-warnings:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [uploads]
+      summary: Підтвердити попередження DQ-звіту з коментарем
+      description: "`QUARANTINE` → `PENDING_REVIEW` (UC-12 AC1)."
+      operationId: confirmWarnings
+      x-roles: [DATA_PROVIDER]
+      x-fr: [FR-22]
+      x-uc: [UC-12]
+      x-dg: [DG-21]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [comment]
+              properties:
+                comment: { type: string, minLength: 5, maxLength: 2000 }
+      responses:
+        "200":
+          description: Передано DG-офіцеру
+          content: { application/json: { schema: { $ref: "#/components/schemas/DatasetVersion" } } }
+        "409": { $ref: "#/components/responses/InvalidState" }
+
+  # ================================================================ dg-review
+  /dg/review-queue:
+    get:
+      tags: [dg-review]
+      summary: Черга версій на перевірку
+      operationId: listReviewQueue
+      x-roles: [DG_OFFICER]
+      x-fr: [FR-23]
+      x-uc: [UC-13]
+      responses:
+        "200":
+          description: Версії зі статусом PENDING_REVIEW
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/DatasetVersion" }
+
+  /dataset-versions/{id}/publish:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [dg-review]
+      summary: Підтвердити першоджерело й опублікувати версію
+      description: |
+        Попередня опублікована версія → `SUPERSEDED` (не змінюється, D-05); lineage — `previous_id`.
+        Заявки зі статусом `AWAITING_DATA` на цю країну × категорію переходять до угоди (UC-10 AC1).
+      operationId: publishVersion
+      x-roles: [DG_OFFICER]
+      x-fr: [FR-23]
+      x-uc: [UC-13]
+      x-dg: [DG-06, DG-16]
+      x-audit: DATASET_PUBLISH
+      responses:
+        "200":
+          description: Опубліковано
+          content: { application/json: { schema: { $ref: "#/components/schemas/DatasetVersion" } } }
+        "409": { $ref: "#/components/responses/InvalidState" }
+
+  /dataset-versions/{id}/reject:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [dg-review]
+      summary: Відхилити версію з причиною
+      operationId: rejectVersion
+      x-roles: [DG_OFFICER]
+      x-fr: [FR-23]
+      x-uc: [UC-13]
+      x-audit: DATASET_REJECT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReasonBody" }
+      responses:
+        "200":
+          description: Відхилено, постачальника повідомлено
+          content: { application/json: { schema: { $ref: "#/components/schemas/DatasetVersion" } } }
+        "409": { $ref: "#/components/responses/InvalidState" }
+
+  # ================================================================ access-requests
+  /access-requests:
+    get:
+      tags: [access-requests]
+      summary: Заявки, які мені дозволено бачити
+      description: |
+        Представник — заявки своєї організації; адміністратор — усі; постачальник — лише заявки на країну
+        своєї організації після погодження адміністратором (UC-10 EX2).
+      operationId: listAccessRequests
+      x-roles: [ORG_REPRESENTATIVE, ADMIN, DATA_PROVIDER]
+      x-fr: [FR-18, FR-19, FR-20]
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/AccessRequestStatus" }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Заявки
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Page"
+                  - type: object
+                    properties:
+                      items:
+                        type: array
+                        items: { $ref: "#/components/schemas/AccessRequest" }
+    post:
+      tags: [access-requests]
+      summary: Подати заявку на закриті дані
+      description: |
+        Лише представник верифікованої організації. Строк ≤ 180 днів. Якщо набору ще немає — заявка
+        приймається як запит на дані (UC-08 AC1). Статус `SUBMITTED`, номер вигляду `GEDH-2026-0001`.
+      operationId: createAccessRequest
+      x-roles: [ORG_REPRESENTATIVE]
+      x-fr: [FR-18]
+      x-uc: [UC-08]
+      x-dg: [DG-03, DG-07, DG-12]
+      x-audit: REQUEST_SUBMIT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AccessRequestCreate" }
+      responses:
+        "201":
+          description: Заявку зареєстровано, адміністратора сповіщено
+          content: { application/json: { schema: { $ref: "#/components/schemas/AccessRequest" } } }
+        "403":
+          description: "`ORGANIZATION_NOT_VERIFIED` (UC-08 EX1)"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "409":
+          description: |
+            `DUPLICATE_ACTIVE_REQUEST` — уже є активна заявка на цю комбінацію, поле `existing_id` (UC-08 EX2);
+            `DELETION_CONFIRMATION_REQUIRED` — за завершеними дозволами не підтверджено видалення (DG-12, FR-45, Should)
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "422":
+          description: "`NO_PROVIDER_FOR_COUNTRY` (UC-08 EX3) або помилки полів"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /access-requests/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [access-requests]
+      summary: Заявка з рішеннями й угодою
+      operationId: getAccessRequest
+      x-roles: [ORG_REPRESENTATIVE, ADMIN, DATA_PROVIDER]
+      x-fr: [FR-18, FR-19, FR-20]
+      responses:
+        "200":
+          description: Заявка
+          content: { application/json: { schema: { $ref: "#/components/schemas/AccessRequest" } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /access-requests/{id}/admin-decision:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [access-requests]
+      summary: Перше погодження — адміністратор
+      description: |
+        `APPROVED` → `PROVIDER_REVIEW`; `REJECTED` (причина обов'язкова) → `REJECTED`;
+        `NEEDS_CLARIFICATION` (причина = питання) → `NEEDS_CLARIFICATION`.
+        Заборонено, якщо адміністратор — заявник або з організації заявника (D-01, DG-07; також тригер БД).
+      operationId: decideAsAdmin
+      x-roles: [ADMIN]
+      x-fr: [FR-19]
+      x-uc: [UC-09]
+      x-dg: [DG-07]
+      x-audit: REQUEST_DECISION
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision]
+              properties:
+                decision: { type: string, enum: [APPROVED, REJECTED, NEEDS_CLARIFICATION] }
+                reason: { type: [string, "null"], maxLength: 2000, description: "Обов'язкова для REJECTED і NEEDS_CLARIFICATION" }
+      responses:
+        "200":
+          description: Рішення зафіксовано
+          content: { application/json: { schema: { $ref: "#/components/schemas/AccessRequest" } } }
+        "403":
+          description: "`SELF_REVIEW_FORBIDDEN`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "409": { $ref: "#/components/responses/InvalidState" }
+        "422":
+          description: "`REASON_REQUIRED`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /access-requests/{id}/clarification:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [access-requests]
+      summary: Відповісти на запит уточнення
+      description: "`NEEDS_CLARIFICATION` → `SUBMITTED` (UC-09 AC1)."
+      operationId: answerAccessRequestClarification
+      x-roles: [ORG_REPRESENTATIVE]
+      x-uc: [UC-09]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [answer]
+              properties:
+                answer: { type: string, minLength: 5, maxLength: 2000 }
+      responses:
+        "200":
+          description: Заявку повернуто адміністратору
+          content: { application/json: { schema: { $ref: "#/components/schemas/AccessRequest" } } }
+        "409": { $ref: "#/components/responses/InvalidState" }
+
+  /access-requests/{id}/provider-decision:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [access-requests]
+      summary: Друге погодження — постачальник визначає обсяг
+      description: |
+        Лише постачальник організації-власника даних запитаної країни.
+        `APPROVED` — повний обсяг; `APPROVED_NARROWED` — звужений період і/або строк; `REJECTED` — з причиною.
+        Якщо опублікованого набору немає → `AWAITING_DATA` (UC-10 AC1), інакше → `AWAITING_AGREEMENT` (угода сформована).
+      operationId: decideAsProvider
+      x-roles: [DATA_PROVIDER]
+      x-fr: [FR-20]
+      x-uc: [UC-10]
+      x-dg: [DG-07]
+      x-audit: REQUEST_DECISION
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProviderDecision" }
+      responses:
+        "200":
+          description: Обсяг погоджено або заявку відхилено
+          content: { application/json: { schema: { $ref: "#/components/schemas/AccessRequest" } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/InvalidState" }
+        "422":
+          description: "`SCOPE_NOT_NARROWER` — звужений обсяг виходить за межі запитаного; `REASON_REQUIRED`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /access-requests/{id}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [access-requests]
+      summary: Скасувати власну заявку (до видачі дозволу)
+      operationId: cancelAccessRequest
+      x-roles: [ORG_REPRESENTATIVE]
+      x-uc: [UC-08, UC-11]
+      x-audit: REQUEST_DECISION
+      responses:
+        "200":
+          description: Статус CANCELLED
+          content: { application/json: { schema: { $ref: "#/components/schemas/AccessRequest" } } }
+        "409": { $ref: "#/components/responses/InvalidState" }
+
+  # ================================================================ agreements & grants
+  /access-requests/{id}/agreement:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [agreements]
+      summary: Текст угоди з погодженим обсягом
+      description: Хеш SHA-256 тексту повертається разом із текстом; клієнт надсилає його під час акцепту.
+      operationId: getAgreement
+      x-roles: [ORG_REPRESENTATIVE, ADMIN, DATA_PROVIDER]
+      x-fr: [FR-24]
+      x-uc: [UC-11]
+      x-dg: [DG-11]
+      responses:
+        "200":
+          description: Угода
+          content: { application/json: { schema: { $ref: "#/components/schemas/Agreement" } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /access-requests/{id}/agreement/accept:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [agreements]
+      summary: Прийняти угоду й отримати дозвіл
+      description: |
+        Фіксує акцепт (версія, дата, хеш тексту) і в тій самій транзакції видає дозвіл з атрибутами
+        країна, категорія, період, `valid_from`, `valid_to` (≤ 180 днів, також CHECK у БД).
+        Пропозиція угоди діє 14 днів (UC-11 EX2).
+      operationId: acceptAgreement
+      x-roles: [ORG_REPRESENTATIVE]
+      x-fr: [FR-24, FR-25]
+      x-uc: [UC-11]
+      x-dg: [DG-05, DG-11]
+      x-audit: AGREEMENT_ACCEPT + GRANT_ISSUE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text_hash]
+              properties:
+                text_hash:
+                  type: string
+                  pattern: "^[0-9a-f]{64}$"
+                  description: Хеш тексту, який бачив користувач; має збігатися з чинним
+      responses:
+        "201":
+          description: Дозвіл видано
+          content: { application/json: { schema: { $ref: "#/components/schemas/Grant" } } }
+        "409":
+          description: "`AGREEMENT_TEXT_CHANGED`, `OFFER_EXPIRED` або `INVALID_STATE`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /access-requests/{id}/agreement/decline:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [agreements]
+      summary: Відмовитися від угоди
+      description: Статус `CANCELLED`, дозвіл не видається (UC-11 EX1).
+      operationId: declineAgreement
+      x-roles: [ORG_REPRESENTATIVE]
+      x-uc: [UC-11]
+      x-audit: REQUEST_DECISION
+      responses:
+        "200":
+          description: Скасовано
+          content: { application/json: { schema: { $ref: "#/components/schemas/AccessRequest" } } }
+        "409": { $ref: "#/components/responses/InvalidState" }
+
+  /grants:
+    get:
+      tags: [agreements]
+      summary: Дозволи
+      description: Користувач — власні; постачальник — на набори своєї організації; DG-офіцер і адміністратор — усі.
+      operationId: listGrants
+      x-roles: [ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-fr: [FR-25, FR-28]
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [ACTIVE, SUSPENDED, EXPIRED] }
+      responses:
+        "200":
+          description: Дозволи
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Grant" }
+
+  /grants/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [agreements]
+      summary: Дозвіл
+      operationId: getGrant
+      x-roles: [ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-fr: [FR-25]
+      responses:
+        "200":
+          description: Дозвіл
+          content: { application/json: { schema: { $ref: "#/components/schemas/Grant" } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ================================================================ audit
+  /audit/events:
+    get:
+      tags: [audit]
+      summary: Журнал аудиту з фільтрами
+      description: |
+        Лише DG-офіцер; адміністратор отримує 403, і спробу записано (UC-15 EX1).
+        Сам перегляд журналу теж записується (`AUDIT_VIEW`). Пагінація — від нових до старих за `before_seq`.
+      operationId: listAuditEvents
+      x-roles: [DG_OFFICER]
+      x-fr: [FR-31]
+      x-uc: [UC-15]
+      x-dg: [DG-17, DG-18]
+      x-audit: AUDIT_VIEW
+      parameters:
+        - { name: actor_id, in: query, schema: { type: string, format: uuid } }
+        - { name: organization_id, in: query, schema: { type: string, format: uuid } }
+        - { name: action, in: query, schema: { $ref: "#/components/schemas/AuditAction" } }
+        - { name: object_type, in: query, schema: { type: string } }
+        - { name: object_id, in: query, schema: { type: string } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { name: before_seq, in: query, schema: { type: integer, minimum: 1 } }
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Записи
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/AuditEvent" }
+                  next_before_seq: { type: [integer, "null"] }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /audit/events/{seq}:
+    parameters:
+      - name: seq
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    get:
+      tags: [audit]
+      summary: Запис журналу з деталями й хешами
+      operationId: getAuditEvent
+      x-roles: [DG_OFFICER]
+      x-fr: [FR-31]
+      x-uc: [UC-15]
+      x-audit: AUDIT_VIEW
+      responses:
+        "200":
+          description: Запис
+          content: { application/json: { schema: { $ref: "#/components/schemas/AuditEvent" } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ================================================================ internal jobs
+  /internal/jobs/expire-grants:
+    post:
+      tags: [internal]
+      summary: Завершити прострочені дозволи (щодня)
+      description: |
+        Викликає GitHub Actions cron із заголовком `X-Job-Token` (секрет у GitHub Secrets і на Render).
+        Дозволи з `valid_to < now` → `EXPIRED`; заявнику — запит підтвердити видалення даних (DG-12).
+        Ідемпотентно. Додатково `covers()` перевіряє строк на кожному зверненні, тож доступ припиняється
+        вчасно навіть якщо cron не спрацював (DG-05).
+      operationId: jobExpireGrants
+      security:
+        - jobToken: []
+      x-roles: [SYSTEM]
+      x-fr: [FR-28]
+      x-uc: [UC-19]
+      x-dg: [DG-05, DG-08, DG-12]
+      x-audit: GRANT_EXPIRE (для кожного дозволу)
+      responses:
+        "200":
+          description: Скільки дозволів завершено
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [expired]
+                properties:
+                  expired: { type: integer, minimum: 0 }
+        "401":
+          description: "`JOB_TOKEN_INVALID`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Токен доступу, 15 хв
+    refreshCookie:
+      type: apiKey
+      in: cookie
+      name: gedh_refresh
+      description: Токен оновлення, 7 днів, HttpOnly, Path=/api/auth
+    jobToken:
+      type: apiKey
+      in: header
+      name: X-Job-Token
+      description: Секрет службових задач (GitHub Actions)
+
+  parameters:
+    PathId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    PathToken:
+      name: token
+      in: path
+      required: true
+      schema: { type: string, minLength: 32 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    Offset:
+      name: offset
+      in: query
+      schema: { type: integer, minimum: 0, default: 0 }
+    PeriodFrom:
+      name: period_from
+      in: query
+      schema: { type: string, format: date }
+    PeriodTo:
+      name: period_to
+      in: query
+      schema: { type: string, format: date }
+    CsrfHeader:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      schema: { type: string }
+
+  responses:
+    Unauthorized:
+      description: "`NOT_AUTHENTICATED`, `TOKEN_EXPIRED` або `ACCOUNT_NOT_ACTIVE` (статус перевіряється на кожному запиті)"
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Forbidden:
+      description: "`FORBIDDEN_ROLE` — роль не дозволяє дію; спроба записується в журнал аудиту"
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    AccessDenied:
+      description: "`ACCESS_DENIED` (немає дозволу), `GRANT_EXPIRED`, `GRANT_SUSPENDED` — запис DENIED у журнал (UC-16 EX2)"
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    NotFound:
+      description: "`NOT_FOUND`"
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    InvalidState:
+      description: "`INVALID_STATE` — дія недоступна в поточному статусі; поле `status`"
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    FileTooLarge:
+      description: "`FILE_TOO_LARGE` — набір > 5 МБ (NFR-18) або документ > 2 МБ (NFR-19)"
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    TooManyRequests:
+      description: "`RATE_LIMITED` (NFR-20)"
+      headers:
+        Retry-After: { schema: { type: integer }, description: секунди }
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    ValidationError:
+      description: Помилки полів (формат FastAPI)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    loc: { type: array, items: { type: [string, integer] } }
+                    msg: { type: string }
+                    type: { type: string }
+
+  schemas:
+    # ---------------------------------------------------------------- спільні
+    Error:
+      type: object
+      required: [detail]
+      properties:
+        detail: { type: string, description: Стабільний код помилки, example: ACCESS_DENIED }
+        message: { type: string, description: Пояснення для розробника (інтерфейс показує переклад коду) }
+        status: { type: string, description: "Поточний статус об'єкта (для INVALID_STATE, ACCOUNT_NOT_ACTIVE)" }
+        retry_after: { type: integer, description: Секунди (ACCOUNT_LOCKED) }
+        existing_id: { type: string, format: uuid, description: Наявна заявка (DUPLICATE_ACTIVE_REQUEST) }
+    Message:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string }
+    Page:
+      type: object
+      required: [items, total]
+      properties:
+        items: { type: array, items: {} }
+        total: { type: integer, minimum: 0 }
+    TokenBody:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string, minLength: 32 }
+    ReasonBody:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 5, maxLength: 2000 }
+    Period:
+      type: object
+      description: "Тип даних Period (рис. 5.8), {start ≤ end}"
+      required: [start, end]
+      properties:
+        start: { type: string, format: date }
+        end: { type: string, format: date }
+    Health:
+      type: object
+      required: [status, version, env, started_at, uptime_s, db]
+      properties:
+        status: { type: string, const: ok }
+        version: { type: string }
+        env: { type: string }
+        started_at: { type: string, format: date-time }
+        uptime_s: { type: integer }
+        db:
+          type: object
+          required: [status]
+          properties:
+            status: { type: string, enum: [ok, not_configured, error] }
+            latency_ms: { type: integer }
+            server_version: { type: string }
+
+    # ---------------------------------------------------------------- переліки (рис. 5.8)
+    Role:
+      type: string
+      enum: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+    AccountStatus:
+      type: string
+      enum: [PENDING_EMAIL, PENDING_REVIEW, ACTIVE, REJECTED, DEACTIVATED, ANONYMIZED]
+    ReviewStatus:
+      type: string
+      enum: [PENDING, NEEDS_CLARIFICATION, APPROVED, REJECTED]
+    Classification:
+      type: string
+      enum: [PUBLIC, OPEN, RESTRICTED, PERSONAL, INTERNAL]
+    VersionStatus:
+      type: string
+      enum: [QUARANTINE, REJECTED, PENDING_REVIEW, PUBLISHED, SUPERSEDED]
+    AccessRequestStatus:
+      type: string
+      enum: [SUBMITTED, NEEDS_CLARIFICATION, PROVIDER_REVIEW, AWAITING_DATA, AWAITING_AGREEMENT, GRANTED,
+             REJECTED, CANCELLED, EXPIRED]
+    AuditAction:
+      type: string
+      enum: [LOGIN, LOGIN_FAILED, CONSENT_CHANGE, REGISTRATION_DECISION, ROLE_CHANGE, REQUEST_SUBMIT,
+             REQUEST_DECISION, AGREEMENT_ACCEPT, GRANT_ISSUE, GRANT_SUSPEND, GRANT_EXPIRE, DATASET_UPLOAD,
+             DATASET_PUBLISH, DATA_VIEW, DATA_DOWNLOAD, CONFIG_CHANGE, AUDIT_VIEW, AUDIT_EXPORT,
+             PERSONAL_DATA_EXPORT, ACCOUNT_DELETE, RETENTION_PURGE, DATASET_REJECT, DELETION_CONFIRM,
+             SECURITY_INCIDENT]
+
+    # ---------------------------------------------------------------- identity
+    ConsentText:
+      type: object
+      required: [text_version, text, published_at]
+      properties:
+        text_version: { type: string, example: "1.0" }
+        text: { type: string, description: "Мета, правова підстава (GDPR ст. 6(1)(b)), строки, права суб'єкта" }
+        published_at: { type: string, format: date-time }
+    RegistrationForm:
+      type: object
+      required: [full_name, email, password, country_code, account_type, purpose, consent_accepted, consent_text_version]
+      properties:
+        full_name: { type: string, minLength: 2, maxLength: 200 }
+        email: { type: string, format: email, maxLength: 254 }
+        password:
+          type: string
+          format: password
+          minLength: 12
+          maxLength: 128
+          description: NFR-14 — не менше 12 символів, перевірка за списком зламаних паролів
+        country_code: { type: string, pattern: "^[A-Z]{3}$" }
+        account_type: { type: string, enum: [INDIVIDUAL, ORGANIZATION_MEMBER] }
+        organization_id: { type: [string, "null"], format: uuid, description: "Верифікована організація (ORGANIZATION_MEMBER)" }
+        organization_name: { type: [string, "null"], maxLength: 200, description: "Якщо організації немає в списку (UC-02 AC2)" }
+        position: { type: [string, "null"], maxLength: 200 }
+        purpose: { type: string, minLength: 10, maxLength: 2000 }
+        consent_accepted: { type: boolean, const: true }
+        consent_text_version: { type: string }
+        verification_document: { type: string, format: binary, description: "PDF/PNG/JPEG ≤ 2 МБ" }
+    TokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in, user]
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, const: bearer }
+        expires_in: { type: integer, example: 900 }
+        user: { $ref: "#/components/schemas/UserBrief" }
+        consent_update_required:
+          type: boolean
+          description: Прийнята версія згоди застаріла — показати нову (UC-03 AC2)
+    UserBrief:
+      type: object
+      required: [id, full_name, role, status]
+      properties:
+        id: { type: string, format: uuid }
+        full_name: { type: string }
+        role: { $ref: "#/components/schemas/Role" }
+        status: { $ref: "#/components/schemas/AccountStatus" }
+        organization: { oneOf: [{ $ref: "#/components/schemas/OrganizationPublic" }, { type: "null" }] }
+    Me:
+      allOf:
+        - $ref: "#/components/schemas/UserBrief"
+        - type: object
+          required: [email, country_code, created_at, consent, retention]
+          properties:
+            email: { type: string, format: email }
+            position: { type: [string, "null"] }
+            country_code: { type: string }
+            created_at: { type: string, format: date-time }
+            consent:
+              type: object
+              required: [accepted_version, current_version, accepted_at]
+              properties:
+                accepted_version: { type: string }
+                current_version: { type: string }
+                accepted_at: { type: string, format: date-time }
+            retention:
+              type: array
+              description: Що зберігається, навіщо й скільки (табл. 3.26 звіту)
+              items:
+                type: object
+                required: [data, purpose, retention]
+                properties:
+                  data: { type: string }
+                  purpose: { type: string }
+                  retention: { type: string }
+    Registration:
+      type: object
+      required: [id, status, account_type, purpose, submitted_at, applicant]
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/ReviewStatus" }
+        account_type: { type: string, enum: [INDIVIDUAL, ORGANIZATION_MEMBER] }
+        purpose: { type: string }
+        submitted_at: { type: string, format: date-time }
+        decided_at: { type: [string, "null"], format: date-time }
+        decision_reason: { type: [string, "null"] }
+        has_document: { type: boolean }
+        email_domain_matches_organization: { type: [boolean, "null"], description: "FR-04: підказка адміністратору" }
+        organization_name: { type: [string, "null"] }
+        applicant:
+          type: object
+          required: [id, full_name, email, country_code, status]
+          properties:
+            id: { type: string, format: uuid }
+            full_name: { type: string }
+            email: { type: string, format: email }
+            position: { type: [string, "null"] }
+            country_code: { type: string }
+            status: { $ref: "#/components/schemas/AccountStatus" }
+            organization: { oneOf: [{ $ref: "#/components/schemas/OrganizationPublic" }, { type: "null" }] }
+    OrganizationPublic:
+      type: object
+      required: [id, name, type, country_code]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        type: { type: string, enum: [GOVERNMENT, UNIVERSITY, ANALYTICS_COMPANY] }
+        country_code: { type: string }
+    Organization:
+      allOf:
+        - $ref: "#/components/schemas/OrganizationPublic"
+        - type: object
+          required: [status]
+          properties:
+            email_domain: { type: [string, "null"] }
+            status: { type: string, enum: [PENDING, VERIFIED, REJECTED] }
+            verified_at: { type: [string, "null"], format: date-time }
+    OrganizationCreate:
+      type: object
+      required: [name, type, country_code]
+      properties:
+        name: { type: string, minLength: 2, maxLength: 200 }
+        type: { type: string, enum: [GOVERNMENT, UNIVERSITY, ANALYTICS_COMPANY] }
+        country_code: { type: string, pattern: "^[A-Z]{3}$" }
+        email_domain: { type: [string, "null"], maxLength: 100, example: stat.example.org }
+
+    # ---------------------------------------------------------------- довідники й каталог
+    Country:
+      type: object
+      required: [code, name_ua, name_en, is_active]
+      properties:
+        code: { type: string, pattern: "^[A-Z]{3}$" }
+        name_ua: { type: string }
+        name_en: { type: string }
+        is_active: { type: boolean }
+    Category:
+      type: object
+      required: [code, name_ua, name_en]
+      properties:
+        code: { type: string }
+        name_ua: { type: string }
+        name_en: { type: string }
+    Indicator:
+      type: object
+      required: [code, name_ua, name_en, definition, unit, scale, frequency]
+      properties:
+        code: { type: string }
+        name_ua: { type: string }
+        name_en: { type: string }
+        definition: { type: string }
+        unit: { type: string }
+        scale: { type: string }
+        frequency: { type: string, enum: [ANNUAL, QUARTERLY, MONTHLY] }
+    DatasetSummary:
+      type: object
+      required: [id, kind, title_ua, title_en, classification, licence, is_synthetic]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [OPEN, RESTRICTED] }
+        title_ua: { type: string }
+        title_en: { type: string }
+        classification: { $ref: "#/components/schemas/Classification" }
+        licence: { type: string }
+        is_synthetic: { type: boolean, description: "Позначка «СИНТЕТИЧНІ ДАНІ» (FR-27, DG-04)" }
+        source_system: { type: [string, "null"] }
+        country_code: { type: [string, "null"] }
+        category_code: { type: [string, "null"] }
+        owner: { oneOf: [{ $ref: "#/components/schemas/OrganizationPublic" }, { type: "null" }] }
+        indicators: { type: array, items: { type: string } }
+        current_version_no: { type: [integer, "null"] }
+        updated_at: { type: [string, "null"], format: date-time }
+    DatasetDetail:
+      allOf:
+        - $ref: "#/components/schemas/DatasetSummary"
+        - type: object
+          properties:
+            status: { type: [string, "null"], enum: [DRAFT, ACTIVE, WITHDRAWN, null] }
+            versions:
+              type: array
+              items:
+                type: object
+                required: [id, version_no, status]
+                properties:
+                  id: { type: string, format: uuid }
+                  version_no: { type: integer }
+                  status: { $ref: "#/components/schemas/VersionStatus" }
+                  published_at: { type: [string, "null"], format: date-time }
+
+    # ---------------------------------------------------------------- дані
+    Observation:
+      type: object
+      required: [country, indicator, period, value]
+      properties:
+        country: { type: string }
+        indicator: { type: string }
+        breakdown: { type: [string, "null"] }
+        period: { $ref: "#/components/schemas/Period" }
+        value: { type: [number, "null"], description: "null = «н/д», без інтерполяції (UC-05 EX1)" }
+        note: { type: [string, "null"] }
+    ObservationsResponse:
+      type: object
+      required: [dataset_id, version_no, is_synthetic, coverage, items]
+      properties:
+        dataset_id: { type: string, format: uuid }
+        version_no: { type: integer }
+        is_synthetic: { type: boolean }
+        coverage: { type: string, enum: [FULL, PARTIAL] }
+        covered_period: { oneOf: [{ $ref: "#/components/schemas/Period" }, { type: "null" }] }
+        grant_id: { type: [string, "null"], format: uuid }
+        source: { $ref: "#/components/schemas/SourceReference" }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Observation" }
+    ExportFile:
+      type: object
+      description: JSON-вивантаження — метадані й значення (FR-11, FR-27)
+      required: [metadata, observations]
+      properties:
+        metadata:
+          type: object
+          required: [dataset_id, title, version_no, generated_at, licence, is_synthetic]
+          properties:
+            dataset_id: { type: string, format: uuid }
+            title: { type: string }
+            version_no: { type: integer }
+            generated_at: { type: string, format: date-time }
+            licence: { type: string }
+            source: { type: string }
+            is_synthetic: { type: boolean }
+            synthetic_notice: { type: [string, "null"], example: "СИНТЕТИЧНІ ДАНІ — не є офіційною статистикою" }
+            grant_id: { type: [string, "null"], format: uuid }
+            coverage: { type: string, enum: [FULL, PARTIAL] }
+        observations:
+          type: array
+          items: { $ref: "#/components/schemas/Observation" }
+
+    # ---------------------------------------------------------------- завантаження й якість
+    SourceReference:
+      type: object
+      description: Першоджерело (DG-06, Q-11)
+      required: [document_title, methodology, responsible_person]
+      properties:
+        document_title: { type: string, maxLength: 300 }
+        document_number: { type: [string, "null"], maxLength: 100 }
+        document_date: { type: [string, "null"], format: date }
+        url: { type: [string, "null"], format: uri, maxLength: 500 }
+        internal_ref: { type: [string, "null"], maxLength: 200 }
+        methodology: { type: string }
+        responsible_person: { type: string, maxLength: 200 }
+    UploadForm:
+      type: object
+      required: [file, category_code, source_document_title, source_methodology, source_responsible_person]
+      properties:
+        file: { type: string, format: binary, description: "CSV (UTF-8) або JSON за шаблоном, ≤ 5 МБ" }
+        dataset_id: { type: [string, "null"], format: uuid, description: "Нова версія наявного набору; якщо порожньо — новий набір" }
+        category_code: { type: string }
+        title_ua: { type: [string, "null"], maxLength: 300, description: Обов'язково для нового набору }
+        title_en: { type: [string, "null"], maxLength: 300, description: Обов'язково для нового набору }
+        source_document_title: { type: string }
+        source_document_number: { type: [string, "null"] }
+        source_document_date: { type: [string, "null"], format: date }
+        source_url: { type: [string, "null"], format: uri }
+        source_internal_ref: { type: [string, "null"] }
+        source_methodology: { type: string }
+        source_responsible_person: { type: string }
+    QualityIssue:
+      type: object
+      required: [rule_code, severity, record_ref, message]
+      properties:
+        rule_code: { type: string, example: Q-06 }
+        severity: { type: string, enum: [CRITICAL, WARNING] }
+        record_ref: { type: string, description: "Рядок файлу або ключ запису", example: "row 17" }
+        message: { type: string }
+    QualityReport:
+      type: object
+      required: [records_total, critical_count, warning_count, score, issues]
+      properties:
+        records_total: { type: integer }
+        critical_count: { type: integer }
+        warning_count: { type: integer }
+        score: { type: number, minimum: 0, maximum: 100 }
+        warnings_confirmed_at: { type: [string, "null"], format: date-time }
+        issues:
+          type: array
+          items: { $ref: "#/components/schemas/QualityIssue" }
+    DatasetVersion:
+      type: object
+      required: [id, dataset_id, version_no, status, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        dataset_id: { type: string, format: uuid }
+        dataset_title_ua: { type: string }
+        version_no: { type: integer }
+        status: { $ref: "#/components/schemas/VersionStatus" }
+        file_hash: { type: [string, "null"], description: SHA-256 }
+        created_at: { type: string, format: date-time }
+        published_at: { type: [string, "null"], format: date-time }
+        rejection_reason: { type: [string, "null"] }
+        previous_version_id: { type: [string, "null"], format: uuid }
+        source: { oneOf: [{ $ref: "#/components/schemas/SourceReference" }, { type: "null" }] }
+        quality_report: { oneOf: [{ $ref: "#/components/schemas/QualityReport" }, { type: "null" }] }
+
+    # ---------------------------------------------------------------- обмін
+    AccessRequestCreate:
+      type: object
+      required: [country_code, category_code, period, purpose, usage_place, requested_term_days, responsible_person]
+      properties:
+        country_code: { type: string, pattern: "^[A-Z]{3}$" }
+        category_code: { type: string }
+        period: { $ref: "#/components/schemas/Period" }
+        purpose: { type: string, minLength: 10, maxLength: 2000 }
+        usage_place: { type: string, minLength: 2, maxLength: 300 }
+        requested_term_days: { type: integer, minimum: 1, maximum: 180 }
+        responsible_person: { type: string, minLength: 2, maxLength: 200 }
+    ApprovalDecision:
+      type: object
+      required: [stage, decision, decided_at, decided_by]
+      properties:
+        stage: { type: string, enum: [ADMIN, PROVIDER] }
+        decision: { type: string, enum: [APPROVED, APPROVED_NARROWED, REJECTED] }
+        reason: { type: [string, "null"] }
+        approved_period: { oneOf: [{ $ref: "#/components/schemas/Period" }, { type: "null" }] }
+        approved_term_days: { type: [integer, "null"] }
+        decided_at: { type: string, format: date-time }
+        decided_by: { type: string, description: ПІБ і роль }
+    AccessRequest:
+      allOf:
+        - $ref: "#/components/schemas/AccessRequestCreate"
+        - type: object
+          required: [id, number, status, submitted_at, requester, organization]
+          properties:
+            id: { type: string, format: uuid }
+            number: { type: string, example: GEDH-2026-0001 }
+            status: { $ref: "#/components/schemas/AccessRequestStatus" }
+            submitted_at: { type: string, format: date-time }
+            requester: { type: string, description: ПІБ заявника }
+            organization: { $ref: "#/components/schemas/OrganizationPublic" }
+            target_dataset_id: { type: [string, "null"], format: uuid }
+            decisions:
+              type: array
+              maxItems: 2
+              items: { $ref: "#/components/schemas/ApprovalDecision" }
+            clarification_note: { type: [string, "null"] }
+            grant_id: { type: [string, "null"], format: uuid }
+    ProviderDecision:
+      type: object
+      required: [decision]
+      properties:
+        decision: { type: string, enum: [APPROVED, APPROVED_NARROWED, REJECTED] }
+        approved_period: { oneOf: [{ $ref: "#/components/schemas/Period" }, { type: "null" }], description: "Для APPROVED_NARROWED — у межах запитаного" }
+        approved_term_days: { type: [integer, "null"], minimum: 1, maximum: 180 }
+        reason: { type: [string, "null"], maxLength: 2000, description: "Обов'язкова для REJECTED" }
+    Agreement:
+      type: object
+      required: [id, request_id, text_version, text, text_hash, offered_at, offer_expires_at, scope]
+      properties:
+        id: { type: string, format: uuid }
+        request_id: { type: string, format: uuid }
+        text_version: { type: string }
+        text: { type: string, description: "Мета, місце використання, заборона передачі третім особам, видалення після строку" }
+        text_hash: { type: string, description: SHA-256 тексту }
+        offered_at: { type: string, format: date-time }
+        offer_expires_at: { type: string, format: date-time, description: "offered_at + 14 днів" }
+        accepted_at: { type: [string, "null"], format: date-time }
+        scope:
+          type: object
+          required: [country_code, category_code, period, term_days, dataset_id]
+          properties:
+            country_code: { type: string }
+            category_code: { type: string }
+            period: { $ref: "#/components/schemas/Period" }
+            term_days: { type: integer, maximum: 180 }
+            dataset_id: { type: string, format: uuid }
+            narrowed: { type: boolean, description: "Постачальник звузив обсяг (UC-11 AC1)" }
+    Grant:
+      type: object
+      required: [id, dataset_id, country_code, category_code, period, valid_from, valid_to, status]
+      properties:
+        id: { type: string, format: uuid }
+        request_number: { type: string }
+        dataset_id: { type: string, format: uuid }
+        country_code: { type: string }
+        category_code: { type: string }
+        period: { $ref: "#/components/schemas/Period" }
+        valid_from: { type: string, format: date-time }
+        valid_to: { type: string, format: date-time }
+        status: { type: string, enum: [ACTIVE, SUSPENDED, EXPIRED] }
+        suspension_reason: { type: [string, "null"] }
+        deletion_confirmed_at: { type: [string, "null"], format: date-time }
+        grantee: { type: string, description: ПІБ }
+
+    # ---------------------------------------------------------------- аудит
+    AuditEvent:
+      type: object
+      required: [seq, occurred_at, action, object_type, object_id, result, request_id, prev_hash, hash]
+      properties:
+        seq: { type: integer }
+        occurred_at: { type: string, format: date-time }
+        actor_id: { type: [string, "null"], format: uuid }
+        actor_role: { oneOf: [{ $ref: "#/components/schemas/Role" }, { type: "null" }] }
+        on_behalf_of_id: { type: [string, "null"], format: uuid }
+        action: { $ref: "#/components/schemas/AuditAction" }
+        object_type: { type: string }
+        object_id: { type: string }
+        result: { type: string, enum: [SUCCESS, DENIED, ERROR] }
+        request_id: { type: string }
+        details: { type: string, description: "JSON без персональних даних і без значень закритих даних (DG-25)" }
+        prev_hash: { type: string }
+        hash: { type: string, description: "SHA-256(вміст запису + prev_hash)" }
