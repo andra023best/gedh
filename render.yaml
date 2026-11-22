@@ -1,0 +1,22 @@
+# Render Blueprint: backend GEDH на безкоштовному тарифі у Франкфурті (D-30, DG-27).
+services:
+  - type: web
+    name: gedh-api
+    runtime: docker
+    plan: free
+    region: frankfurt
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false # вводиться вручну в панелі Render (рядок підключення Neon)
+      - key: DIAG_ENABLED
+        value: "true"
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: FRONTEND_BASE_URL
+        sync: false # адреса сайту на Vercel

@@ -1,0 +1,31 @@
+/* Мінімальні стилі етапу Е0; дизайн — окремим кроком (S-05). */
+body {
+  font-family: system-ui, sans-serif;
+  margin: 0;
+  background: #fff;
+  color: #1a1a1a;
+}
+main {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 16px;
+}
+section {
+  border-top: 1px solid #ccc;
+  padding: 8px 0 16px;
+}
+.mark {
+  display: inline-block;
+  width: 1.6em;
+}
+.warn {
+  color: #8a5a00;
+}
+pre {
+  background: #f4f4f4;
+  padding: 8px;
+  overflow-x: auto;
+}
+button {
+  margin: 4px 0;
+}

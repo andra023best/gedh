@@ -1,0 +1,23 @@
+# Секрети
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+dist/
+
+# Редактори й ОС
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
