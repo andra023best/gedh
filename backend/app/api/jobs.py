@@ -6,10 +6,10 @@
 
 import hmac
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, BackgroundTasks, Request
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 
 from app.api.exchange import OFFER_TTL, notify
 from app.core import audit
@@ -19,9 +19,18 @@ from app.core.deps import request_id
 from app.core.errors import ApiError
 from app.ingestion.service import run_all
 from app.models.datasets import RestrictedDataset
-from app.models.enums import AccessRequestStatus, AuditAction, GrantStatus, RunTrigger
+from app.models.enums import (
+    AccessRequestStatus,
+    AccountStatus,
+    AuditAction,
+    GrantStatus,
+    ReviewStatus,
+    RunTrigger,
+)
 from app.models.exchange import AccessGrant, AccessRequest, DataSharingAgreement
-from app.models.identity import User
+from app.models.identity import ApiKey, RegistrationRequest, User
+from app.models.identity import Session as UserSession
+from app.models.technical import ActionToken, RawPayload, StoredFile
 
 router = APIRouter(prefix="/internal/jobs", tags=["internal"])
 
@@ -107,3 +116,111 @@ def expire_grants(rid: str, now: datetime | None = None) -> dict:
 def job_expire_grants(request: Request) -> dict:
     check_job_token(request)
     return expire_grants(request_id(request) or f"job-{uuid.uuid4()}")
+
+
+ANONYMIZE_AFTER = timedelta(days=30)  # табл. 3.26, DG-24: обліковий запис — поки активний + 30 днів
+UNCONFIRMED_KEEP = timedelta(days=30)  # реєстрація без підтвердження e-mail — так само 30 днів
+TOKEN_KEEP = timedelta(days=30)  # технічні записи: використані або прострочені токени й сесії
+ANON_NAME = "Анонімізований користувач"
+
+
+def anonymize(db, user: User, now: datetime) -> None:
+    """DG-24: ПІБ, e-mail і посада стираються; ідентифікатор лишається псевдонімом у журналі аудиту.
+
+    Записи згоди (з IP) зберігаються ще 3 роки (табл. 3.26) — їх не змінює й тригер DG-10.
+    """
+    user.full_name = ANON_NAME
+    user.email = f"anonymized-{user.id.hex}@anonymized.invalid"
+    user.position = None
+    user.password_hash = "!"  # noqa: S105 — не є хешем Argon2, тож увійти неможливо
+    user.status = AccountStatus.ANONYMIZED
+    user.locked_until = None
+    user.deactivated_at = user.deactivated_at or now
+    rr = db.scalar(select(RegistrationRequest).where(RegistrationRequest.user_id == user.id))
+    if rr is not None:
+        rr.purpose = "(анонімізовано)"
+        rr.clarification_note = None
+        rr.clarification_answer = None
+        rr.decision_reason = None
+    db.execute(delete(ActionToken).where(ActionToken.user_id == user.id))
+    db.execute(delete(UserSession).where(UserSession.user_id == user.id))
+    db.execute(delete(ApiKey).where(ApiKey.user_id == user.id))
+
+
+def apply_retention(rid: str, now: datetime | None = None) -> dict:
+    """DG-23: строки зберігання з табл. 3.26 — щоденно; кожна категорія з кількістю записів — у журнал аудиту.
+
+    1. Облікові записи: деактивовані понад 30 днів, відхилені заявки на реєстрацію понад 30 днів,
+       непідтверджені e-mail понад 30 днів → анонімізація (DG-24).
+    2. Файли (документи верифікації, відхилені файли карантину) з минулим `delete_after` → видалення.
+    3. Сирі відповіді API старші 90 днів → видалення (хеш лишається в журналі запуску).
+    4. Технічні записи: використані чи прострочені токени дій і сесії старші 30 днів.
+    Журнал аудиту ця задача не чіпає (DG-19). Ідемпотентно.
+    """
+    now = now or datetime.now(UTC)
+    edge = now - ANONYMIZE_AFTER
+    counts: dict[str, int] = {}
+    with new_session() as db:
+        rejected = select(RegistrationRequest.user_id).where(
+            RegistrationRequest.status == ReviewStatus.REJECTED, RegistrationRequest.decided_at <= edge
+        )
+        users = list(
+            db.scalars(
+                select(User).where(
+                    User.status != AccountStatus.ANONYMIZED,
+                    or_(
+                        (User.status == AccountStatus.DEACTIVATED) & (User.deactivated_at <= edge),
+                        (User.status == AccountStatus.REJECTED) & User.id.in_(rejected),
+                        (User.status == AccountStatus.PENDING_EMAIL)
+                        & (User.created_at <= now - UNCONFIRMED_KEEP),
+                    ),
+                )
+            )
+        )
+        for u in users:
+            anonymize(db, u, now)
+        counts["accounts_anonymized"] = len(users)
+        counts["files_deleted"] = db.execute(
+            delete(StoredFile).where(StoredFile.delete_after.is_not(None), StoredFile.delete_after <= now)
+        ).rowcount
+        counts["raw_payloads_deleted"] = db.execute(
+            delete(RawPayload).where(RawPayload.delete_after <= now)
+        ).rowcount
+        counts["tokens_deleted"] = db.execute(
+            delete(ActionToken).where(
+                or_(ActionToken.expires_at <= now - TOKEN_KEEP, ActionToken.used_at <= now - TOKEN_KEEP)
+            )
+        ).rowcount
+        counts["sessions_deleted"] = db.execute(
+            delete(UserSession).where(
+                or_(UserSession.expires_at <= now - TOKEN_KEEP, UserSession.revoked_at <= now - TOKEN_KEEP)
+            )
+        ).rowcount
+        for category, n in counts.items():
+            if n:
+                audit.append(
+                    db,
+                    action=AuditAction.RETENTION_PURGE,
+                    object_type="retention",
+                    object_id=category,
+                    request_id=rid,
+                    details={"category": category, "count": n},
+                )
+        for u in users:  # кожна анонімізація окремо: DG-офіцер бачить, чий псевдонім став знеособленим
+            audit.append(
+                db,
+                action=AuditAction.ACCOUNT_DELETE,
+                object_type="user",
+                object_id=u.id,
+                request_id=rid,
+                details={"step": "ANONYMIZED"},
+            )
+        db.commit()
+    return counts
+
+
+@router.post("/retention")
+def job_retention(request: Request) -> dict:
+    """DG-23, DG-24: щоденно після завершення дозволів (.github/workflows/daily.yml)."""
+    check_job_token(request)
+    return apply_retention(request_id(request) or f"job-{uuid.uuid4()}")

@@ -1375,8 +1375,11 @@ paths:
       tags: [audit]
       summary: Журнал аудиту з фільтрами
       description: |
-        Лише DG-офіцер; адміністратор отримує 403, і спробу записано (UC-15 EX1).
-        Сам перегляд журналу теж записується (`AUDIT_VIEW`). Пагінація — від нових до старих за `before_seq`.
+        Лише DG-офіцер; адміністратор та інші ролі отримують 403, спробу записано як `AUDIT_VIEW` / `DENIED`
+        (UC-15 EX1). Сам перегляд журналу теж записується (`AUDIT_VIEW`, у деталях — фільтри без e-mail).
+        Пагінація — від нових до старих за `before_seq`. Фільтр `country` — за об'єктом події (набір, версія,
+        дозвіл, заявка, угода, організація, користувач) або організацією виконавця; `dataset_id` — сам набір,
+        його версії, імпорти, дозволи, заявки й угоди. S-30.
       operationId: listAuditEvents
       x-roles: [DG_OFFICER]
       x-fr: [FR-31]
@@ -1384,13 +1387,17 @@ paths:
       x-dg: [DG-17, DG-18]
       x-audit: AUDIT_VIEW
       parameters:
-        - { name: actor_id, in: query, schema: { type: string, format: uuid } }
-        - { name: organization_id, in: query, schema: { type: string, format: uuid } }
-        - { name: action, in: query, schema: { $ref: "#/components/schemas/AuditAction" } }
-        - { name: object_type, in: query, schema: { type: string } }
-        - { name: object_id, in: query, schema: { type: string } }
-        - { name: from, in: query, schema: { type: string, format: date-time } }
-        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - $ref: "#/components/parameters/AuditActorId"
+        - $ref: "#/components/parameters/AuditActorEmail"
+        - $ref: "#/components/parameters/AuditOrganizationId"
+        - $ref: "#/components/parameters/AuditCountry"
+        - $ref: "#/components/parameters/AuditDatasetId"
+        - $ref: "#/components/parameters/AuditActionParam"
+        - $ref: "#/components/parameters/AuditResultParam"
+        - $ref: "#/components/parameters/AuditObjectType"
+        - $ref: "#/components/parameters/AuditObjectId"
+        - $ref: "#/components/parameters/AuditFrom"
+        - $ref: "#/components/parameters/AuditTo"
         - { name: before_seq, in: query, schema: { type: integer, minimum: 1 } }
         - $ref: "#/components/parameters/Limit"
       responses:
@@ -1424,10 +1431,85 @@ paths:
       x-audit: AUDIT_VIEW
       responses:
         "200":
-          description: Запис
-          content: { application/json: { schema: { $ref: "#/components/schemas/AuditEvent" } } }
+          description: "Запис; `hash_valid` — хеш відповідає вмісту й попередньому запису"
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/AuditEvent"
+                  - type: object
+                    required: [hash_valid]
+                    properties:
+                      hash_valid: { type: boolean }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  /audit/integrity:
+    get:
+      tags: [audit]
+      summary: Перевірити цілісність хеш-ланцюжка журналу
+      description: |
+        Перераховує SHA-256 усіх записів від першого (UC-15 AC1). Відповідь — «цілісність підтверджено»
+        або номер першого запису, де ланцюжок порушено. Сама перевірка записується (`AUDIT_VIEW`).
+      operationId: verifyAuditIntegrity
+      x-roles: [DG_OFFICER]
+      x-priority: Could
+      x-fr: [FR-32]
+      x-uc: [UC-15]
+      x-dg: [DG-19]
+      x-audit: AUDIT_VIEW
+      responses:
+        "200":
+          description: Результат перевірки
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, checked, first_broken_seq, last_seq, last_hash, checked_at]
+                properties:
+                  ok: { type: boolean }
+                  checked: { type: integer, minimum: 0 }
+                  first_broken_seq: { type: [integer, "null"] }
+                  last_seq: { type: integer, minimum: 0 }
+                  last_hash: { type: string }
+                  checked_at: { type: string, format: date-time }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /audit/export:
+    get:
+      tags: [audit]
+      summary: Експорт вибірки журналу в CSV
+      description: |
+        Ті самі фільтри, що й у списку; до 10 000 записів, від нових до старих (UC-15 крок 5).
+        Файл без ПІБ, e-mail та IP (D-40); SHA-256 файлу — у заголовку `X-Content-SHA256` і в журналі (`AUDIT_EXPORT`).
+      operationId: exportAuditEvents
+      x-roles: [DG_OFFICER]
+      x-priority: Should
+      x-fr: [FR-40]
+      x-uc: [UC-15]
+      x-dg: [DG-17]
+      x-audit: AUDIT_EXPORT (фільтри, кількість записів, хеш файлу)
+      parameters:
+        - $ref: "#/components/parameters/AuditActorId"
+        - $ref: "#/components/parameters/AuditActorEmail"
+        - $ref: "#/components/parameters/AuditOrganizationId"
+        - $ref: "#/components/parameters/AuditCountry"
+        - $ref: "#/components/parameters/AuditDatasetId"
+        - $ref: "#/components/parameters/AuditActionParam"
+        - $ref: "#/components/parameters/AuditResultParam"
+        - $ref: "#/components/parameters/AuditObjectType"
+        - $ref: "#/components/parameters/AuditObjectId"
+        - $ref: "#/components/parameters/AuditFrom"
+        - $ref: "#/components/parameters/AuditTo"
+      responses:
+        "200":
+          description: CSV (UTF-8 з BOM)
+          headers:
+            X-Content-SHA256: { schema: { type: string } }
+          content:
+            text/csv:
+              schema: { type: string }
+        "403": { $ref: "#/components/responses/Forbidden" }
 
   # ================================================================ internal jobs
   /internal/jobs/import:
@@ -1488,6 +1570,35 @@ paths:
           description: "`JOB_TOKEN_INVALID`"
           content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
 
+  /internal/jobs/retention:
+    post:
+      tags: [internal]
+      summary: Строки зберігання й анонімізація (щодня)
+      description: |
+        Табл. 3.26 звіту (DG-23, DG-24). Облікові записи, деактивовані понад 30 днів (а також відхилені
+        реєстрації й непідтверджені e-mail понад 30 днів), анонімізуються. Файли з минулим `delete_after`,
+        сирі відповіді API старші 90 днів, прострочені токени й сесії видаляються. Кожна категорія з кількістю —
+        `RETENTION_PURGE`, кожна анонімізація — `ACCOUNT_DELETE`. Журнал аудиту не змінюється (DG-19). Ідемпотентно.
+      operationId: jobRetention
+      security:
+        - jobToken: []
+      x-roles: [SYSTEM]
+      x-fr: [FR-34, FR-42]
+      x-uc: [UC-21]
+      x-dg: [DG-23, DG-24, DG-25]
+      x-audit: RETENTION_PURGE і ACCOUNT_DELETE
+      responses:
+        "200":
+          description: Скільки записів оброблено за категоріями
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: { type: integer, minimum: 0 }
+        "401":
+          description: "`JOB_TOKEN_INVALID`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
 components:
   securitySchemes:
     bearer:
@@ -1507,6 +1618,21 @@ components:
       description: Секрет службових задач (GitHub Actions)
 
   parameters:
+    AuditActorId: { name: actor_id, in: query, schema: { type: string, format: uuid } }
+    AuditActorEmail:
+      name: actor_email
+      in: query
+      description: "E-mail виконавця; перетворюється на actor_id, у журнал перегляду e-mail не потрапляє (D-40)"
+      schema: { type: string, maxLength: 254 }
+    AuditOrganizationId: { name: organization_id, in: query, schema: { type: string, format: uuid } }
+    AuditCountry: { name: country, in: query, schema: { type: string, pattern: "^[A-Z]{3}$" } }
+    AuditDatasetId: { name: dataset_id, in: query, schema: { type: string, format: uuid } }
+    AuditActionParam: { name: action, in: query, schema: { $ref: "#/components/schemas/AuditAction" } }
+    AuditResultParam: { name: result, in: query, schema: { type: string, enum: [SUCCESS, DENIED, ERROR] } }
+    AuditObjectType: { name: object_type, in: query, schema: { type: string, maxLength: 40 } }
+    AuditObjectId: { name: object_id, in: query, schema: { type: string, maxLength: 64 } }
+    AuditFrom: { name: from, in: query, schema: { type: string, format: date-time } }
+    AuditTo: { name: to, in: query, schema: { type: string, format: date-time } }
     PathId:
       name: id
       in: path
@@ -1634,6 +1760,7 @@ components:
             status: { type: string, enum: [ok, not_configured, error] }
             latency_ms: { type: integer }
             server_version: { type: string }
+            app_role: { type: string, description: "Роль БД, від імені якої працює застосунок (DG-19: gedh_app)" }
 
     # ---------------------------------------------------------------- переліки (рис. 5.8)
     Role:
@@ -2064,7 +2191,11 @@ components:
         occurred_at: { type: string, format: date-time }
         actor_id: { type: [string, "null"], format: uuid }
         actor_role: { oneOf: [{ $ref: "#/components/schemas/Role" }, { type: "null" }] }
+        actor_label:
+          type: [string, "null"]
+          description: "Поточний e-mail виконавця, «система» або «анонімізовано»; у записі не зберігається"
         on_behalf_of_id: { type: [string, "null"], format: uuid }
+        organization_label: { type: [string, "null"], description: "Назва організації з довідника" }
         action: { $ref: "#/components/schemas/AuditAction" }
         object_type: { type: string }
         object_id: { type: string }

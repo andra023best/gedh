@@ -8,6 +8,7 @@ import { useAuth } from './lib/authContext';
 import { ROLE_UK } from './lib/messages';
 import { api, logout, markConsentAccepted, post } from './lib/session';
 import AdminRegistrationsPage from './pages/AdminRegistrationsPage';
+import AuditPage from './pages/AuditPage';
 import { CatalogPage, OpenDataPage } from './pages/DataPages';
 import { DgReviewPage, ProviderPage } from './pages/DatasetPages';
 import { GrantsPage, RequestsPage } from './pages/ExchangePages';
@@ -80,6 +81,7 @@ function Nav() {
         {user && user.role !== 'ANALYST' && <NavLink to="/grants">Дозволи</NavLink>}
         {user?.role === 'DATA_PROVIDER' && <NavLink to="/provider">Мої набори</NavLink>}
         {user?.role === 'DG_OFFICER' && <NavLink to="/dg/review">Перевірка наборів</NavLink>}
+        {user?.role === 'DG_OFFICER' && <NavLink to="/audit">Журнал аудиту</NavLink>}
         {user?.role === 'ADMIN' && <NavLink to="/admin/registrations">Заявки на реєстрацію</NavLink>}
         {user && <NavLink to="/profile">Профіль</NavLink>}
         <NavLink to="/system">Стан системи</NavLink>
@@ -186,6 +188,14 @@ export default function App() {
             element={
               <RequireAuth roles={['DG_OFFICER']}>
                 <DgReviewPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/audit"
+            element={
+              <RequireAuth roles={['DG_OFFICER']}>
+                <AuditPage />
               </RequireAuth>
             }
           />

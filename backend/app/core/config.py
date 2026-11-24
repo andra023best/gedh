@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     rate_limit_enabled: bool = True
     # Секрет службових задач (GitHub Actions → /api/internal/jobs/*).
     job_token: str | None = None
+    # DG-19: роль БД, від імені якої застосунок виконує транзакції (SET LOCAL ROLE, міграція 0006);
+    # порожній рядок вимикає. Якщо власник не має права SET ROLE на неї — застосунок працює без неї
+    # і повідомляє це в /api/health (db.app_role).
+    db_app_role: str = "gedh_app"
 
     @property
     def sqlalchemy_url(self) -> str | None:

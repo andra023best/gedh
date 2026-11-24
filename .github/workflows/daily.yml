@@ -1,4 +1,5 @@
-# Щоденні службові задачі (UC-19, FR-28): завершення прострочених дозволів і анулювання угод, не прийнятих за 14 днів.
+# Щоденні службові задачі: завершення прострочених дозволів і анулювання угод, не прийнятих за 14 днів (UC-19, FR-28);
+# строки зберігання й анонімізація через 30 днів (табл. 3.26, DG-23, DG-24).
 # Доступ і без цього перевіряється за строком на кожному зверненні (DG-05); задача лише впорядковує статуси й листи.
 name: Daily jobs
 
@@ -23,3 +24,8 @@ jobs:
           JOB_TOKEN: ${{ secrets.JOB_TOKEN }}
         run: |
           curl -fsS -X POST -H "X-Job-Token: $JOB_TOKEN" https://gedh.vercel.app/api/internal/jobs/expire-grants
+      - name: Строки зберігання й анонімізація (DG-23, DG-24)
+        env:
+          JOB_TOKEN: ${{ secrets.JOB_TOKEN }}
+        run: |
+          curl -fsS -X POST -H "X-Job-Token: $JOB_TOKEN" https://gedh.vercel.app/api/internal/jobs/retention
