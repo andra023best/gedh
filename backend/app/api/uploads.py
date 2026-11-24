@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.api import exchange
 from app.api.serializers import iso
 from app.core import audit, mail
 from app.core.deps import current_user, get_db, request_id, require
@@ -489,6 +490,9 @@ def publish(
     v.status, v.published_at, v.published_by_id = VersionStatus.PUBLISHED, now, user.id
     if d.status == DatasetStatus.DRAFT:
         d.status = DatasetStatus.ACTIVE
+    db.flush()
+    # UC-13 крок 5 / UC-10 AC1: заявки, що чекали на ці дані, отримують угоду
+    waiting = exchange.offer_waiting_requests(db, d)
     audit.append(
         db,
         action=AuditAction.DATASET_PUBLISH,
@@ -501,9 +505,16 @@ def publish(
             "dataset_id": str(d.id),
             "version_no": v.version_no,
             "previous_version_no": prev.version_no if prev else None,
+            "agreements_offered": [r.number for r in waiting],
         },
     )
     db.commit()
+    for r in waiting:
+        exchange.notify(
+            [db.get(User, r.requester_id)],
+            f"GEDH: заявка {r.number}",
+            "Дані опубліковано. Перегляньте й прийміть угоду про обмін даними (14 днів).",
+        )
     notify_uploader(
         db,
         v,

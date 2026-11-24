@@ -50,6 +50,9 @@ class AccessRequest(PeriodMixin, Base):
     responsible_person: Mapped[str] = mapped_column(String(200))
     status: Mapped[AccessRequestStatus] = enum_col(AccessRequestStatus, default=AccessRequestStatus.SUBMITTED)
     submitted_at: Mapped[datetime] = created_at()
+    # Доповнення до рис. 5.6 (S-28): запит адміністратора на уточнення й відповідь заявника (UC-09 AC1)
+    clarification_note: Mapped[str | None] = mapped_column(Text)
+    clarification_answer: Mapped[str | None] = mapped_column(Text)
 
 
 class ApprovalDecision(Base):
@@ -91,6 +94,8 @@ class DataSharingAgreement(Base):
     )
     text_version: Mapped[str] = mapped_column(String(20))
     text_hash: Mapped[str] = mapped_column(String(64))
+    # Доповнення (S-28): повний текст угоди з погодженим обсягом — доказ, з чим саме погодився заявник
+    text: Mapped[str] = mapped_column(Text)
     offered_at: Mapped[datetime] = created_at()
     accepted_at: Mapped[datetime | None] = tz()
 

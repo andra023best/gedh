@@ -1,0 +1,24 @@
+# Щоденні службові задачі (UC-19, FR-28): завершення прострочених дозволів і анулювання угод, не прийнятих за 14 днів.
+# Доступ і без цього перевіряється за строком на кожному зверненні (DG-05); задача лише впорядковує статуси й листи.
+name: Daily jobs
+
+on:
+  schedule:
+    - cron: "15 2 * * *" # щодня 02:15 UTC
+  workflow_dispatch:
+
+jobs:
+  expire-grants:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Розбудити сервер (Render Free засинає після 15 хв)
+        run: |
+          for i in $(seq 1 12); do
+            curl -fsS --max-time 30 https://gedh.vercel.app/api/health && exit 0
+            sleep 10
+          done
+          exit 1
+      - name: Завершити прострочені дозволи
+        env:
+          JOB_TOKEN: ${{ secrets.JOB_TOKEN }}
+        run: curl -fsS -X POST -H "X-Job-Token: $JOB_TOKEN" https://gedh.vercel.app/api/internal/jobs/expire-grants

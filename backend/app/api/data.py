@@ -5,15 +5,19 @@
 Поки дозволів немає, звернення інших до закритого набору → 403 ACCESS_DENIED із записом у журнал.
 """
 
+import csv
+import hashlib
+import io
+import json
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.serializers import iso, org_public
-from app.core import audit
+from app.core import access, audit
 from app.core.deps import current_user, get_db, request_id
 from app.core.errors import ApiError
 from app.ingestion.sources import SPECS
@@ -25,7 +29,8 @@ from app.models.datasets import (
     RestrictedDataset,
     SourceReference,
 )
-from app.models.enums import AuditAction, AuditResult, Role, VersionStatus
+from app.models.enums import AuditAction, AuditResult, ExportChannel, ExportFormat, VersionStatus
+from app.models.exchange import DataExport, data_export_versions
 from app.models.identity import Organization, User
 from app.models.ingestion import Connector, ImportRun, QualityReport
 
@@ -150,13 +155,87 @@ def source_info(db: Session, d: Dataset, v: DatasetVersion) -> dict:
     }
 
 
-def can_read(user: User, d: Dataset) -> bool:
-    """UC-16 (поки без дозволів — етап Е4)."""
-    if isinstance(d, OpenDataset):
-        return True  # активний обліковий запис уже перевірено в current_user
-    if user.role == Role.DG_OFFICER:
-        return True
-    return user.role == Role.DATA_PROVIDER and user.organization_id == d.owner_org_id
+SYNTHETIC_NOTICE = "СИНТЕТИЧНІ ДАНІ — згенеровано для демонстрації, не є офіційною статистикою (D-04)"
+
+
+def load_for_user(
+    db: Session,
+    request: Request,
+    user: User,
+    dataset_id: uuid.UUID,
+    *,
+    action: AuditAction,
+    countries: str | None,
+    period_from: date | None,
+    period_to: date | None,
+    version: int | None = None,
+):
+    """Спільна частина перегляду й вивантаження: AccessPolicy (UC-16) → версія → значення в межах дозволу."""
+    d = db.get(Dataset, dataset_id)
+    if d is None:
+        raise ApiError(404, "NOT_FOUND")
+    decision = access.authorize(db, user, d, period_from, period_to)
+    if not decision.allowed:  # UC-16 EX2: відмова з причиною і записом у журнал
+        audit.append(
+            db,
+            action=action,
+            result=AuditResult.DENIED,
+            object_type="dataset",
+            object_id=d.id,
+            request_id=request_id(request),
+            actor_id=user.id,
+            actor_role=user.role,
+            on_behalf_of_id=user.organization_id,
+            details={"reason": decision.reason},
+        )
+        db.commit()
+        raise ApiError(403, decision.reason)
+    if version:
+        v = db.scalars(
+            select(DatasetVersion).where(
+                DatasetVersion.dataset_id == d.id, DatasetVersion.version_no == version
+            )
+        ).first()
+        if v is not None and decision.basis == "GRANT" and v.status != VersionStatus.PUBLISHED:
+            v = None  # за дозволом — лише чинна опублікована версія
+    else:
+        v = published(db, d.id)
+    if v is None:
+        raise ApiError(404, "NOT_FOUND")
+    q = select(Observation).where(Observation.version_id == v.id)
+    if countries:
+        q = q.where(Observation.country_code.in_([c.strip().upper() for c in countries.split(",")]))
+    if period_from:
+        q = q.where(Observation.period_end >= period_from)
+    if period_to:
+        q = q.where(Observation.period_start <= period_to)
+    obs = db.scalars(
+        q.order_by(
+            Observation.country_code,
+            Observation.indicator_code,
+            Observation.breakdown,
+            Observation.period_start,
+        )
+    ).all()
+    coverage = "FULL"
+    if decision.period:  # видаємо лише те, що покриває дозвіл (UC-16 AC1)
+        lo, hi = decision.period
+        inside = [o for o in obs if o.period_start >= lo and o.period_end <= hi]
+        if len(inside) < len(obs):
+            coverage = "PARTIAL"
+        obs = inside
+    return d, v, obs, decision, coverage
+
+
+def obs_json(o: Observation) -> dict:
+    return {
+        "country": o.country_code,
+        "indicator": o.indicator_code,
+        "breakdown": o.breakdown,
+        "period": {"start": o.period_start.isoformat(), "end": o.period_end.isoformat()},
+        "value": o.value,
+        "note": o.note,
+    }
 
 
 @router.get("/datasets/{dataset_id}/observations")
@@ -170,56 +249,34 @@ def observations(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> dict:
-    d = db.get(Dataset, dataset_id)
-    if d is None:
-        raise ApiError(404, "NOT_FOUND")
-    rid = request_id(request)
-    if not can_read(user, d):
-        audit.append(
-            db,
-            action=AuditAction.DATA_VIEW,
-            result=AuditResult.DENIED,
-            object_type="dataset",
-            object_id=d.id,
-            request_id=rid,
-            actor_id=user.id,
-            actor_role=user.role,
-            on_behalf_of_id=user.organization_id,
-            details={"reason": "NO_GRANT"},
-        )
-        db.commit()
-        raise ApiError(403, "ACCESS_DENIED")
-    if version:
-        v = db.scalars(
-            select(DatasetVersion).where(
-                DatasetVersion.dataset_id == d.id, DatasetVersion.version_no == version
-            )
-        ).first()
-    else:
-        v = published(db, d.id)
-    if v is None:
-        raise ApiError(404, "NOT_FOUND")
-    q = select(Observation).where(Observation.version_id == v.id)
-    if countries:
-        q = q.where(Observation.country_code.in_([c.strip().upper() for c in countries.split(",")]))
-    if period_from:
-        q = q.where(Observation.period_end >= period_from)
-    if period_to:
-        q = q.where(Observation.period_start <= period_to)
-    obs = db.scalars(
-        q.order_by(Observation.country_code, Observation.indicator_code, Observation.period_start)
-    ).all()
+    d, v, obs, decision, coverage = load_for_user(
+        db,
+        request,
+        user,
+        dataset_id,
+        action=AuditAction.DATA_VIEW,
+        countries=countries,
+        period_from=period_from,
+        period_to=period_to,
+        version=version,
+    )
     report = db.scalars(select(QualityReport).where(QualityReport.version_id == v.id)).first()
     audit.append(
         db,
         action=AuditAction.DATA_VIEW,
         object_type="dataset",
         object_id=d.id,
-        request_id=rid,
+        request_id=request_id(request),
         actor_id=user.id,
         actor_role=user.role,
         on_behalf_of_id=user.organization_id,
-        details={"version_no": v.version_no, "records": len(obs)},
+        details={
+            "version_no": v.version_no,
+            "records": len(obs),
+            "basis": decision.basis,
+            "grant_id": str(decision.grant.id) if decision.grant else None,
+            "coverage": coverage,
+        },
     )
     db.commit()
     return {
@@ -228,24 +285,132 @@ def observations(
         "version_no": v.version_no,
         "published_at": iso(v.published_at),
         "is_synthetic": d.is_synthetic,
-        "coverage": "FULL",
-        "covered_period": None,
-        "grant_id": None,
+        "synthetic_notice": SYNTHETIC_NOTICE if d.is_synthetic else None,
+        "coverage": coverage,
+        "covered_period": {"start": iso(decision.period[0]), "end": iso(decision.period[1])}
+        if decision.period
+        else None,
+        "grant_id": str(decision.grant.id) if decision.grant else None,
+        "grant_valid_to": iso(decision.grant.valid_to) if decision.grant else None,
         "licence": d.licence,
         "quality": {"score": report.score, "warnings": report.warning_count} if report else None,
         "source": source_info(db, d, v),
-        "items": [
-            {
-                "country": o.country_code,
-                "indicator": o.indicator_code,
-                "breakdown": o.breakdown,
-                "period": {"start": o.period_start.isoformat(), "end": o.period_end.isoformat()},
-                "value": o.value,
-                "note": o.note,
-            }
-            for o in obs
-        ],
+        "items": [obs_json(o) for o in obs],
     }
+
+
+def csv_safe(text: str | None) -> str:
+    """Захист від CSV injection: текст, що починається з = + - @, Excel не виконає як формулу."""
+    if not text:
+        return ""
+    return "'" + text if text[0] in "=+-@\t\r" else text
+
+
+@router.get("/datasets/{dataset_id}/export")
+def export(
+    dataset_id: uuid.UUID,
+    request: Request,
+    format: str = Query(pattern="^(csv|json)$"),
+    countries: str | None = None,
+    period_from: date | None = None,
+    period_to: date | None = None,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """UC-07, FR-11, FR-27: файл з метаданими й SHA-256; для закритих — ідентифікатор дозволу й позначка."""
+    d, v, obs, decision, coverage = load_for_user(
+        db,
+        request,
+        user,
+        dataset_id,
+        action=AuditAction.DATA_DOWNLOAD,
+        countries=countries,
+        period_from=period_from,
+        period_to=period_to,
+    )
+    generated = datetime.now(UTC)
+    src = source_info(db, d, v)
+    meta = {
+        "dataset_id": str(d.id),
+        "title": d.title_ua,
+        "version_no": v.version_no,
+        "published_at": iso(v.published_at),
+        "generated_at": generated.isoformat(),
+        "licence": d.licence,
+        "source": src.get("document_title"),
+        "is_synthetic": d.is_synthetic,
+        "synthetic_notice": SYNTHETIC_NOTICE if d.is_synthetic else None,
+        "grant_id": str(decision.grant.id) if decision.grant else None,
+        "coverage": coverage,
+        "covered_period": [iso(decision.period[0]), iso(decision.period[1])] if decision.period else None,
+    }
+    if format == "json":
+        body = json.dumps(
+            {"metadata": meta, "observations": [obs_json(o) for o in obs]}, ensure_ascii=False, indent=1
+        ).encode("utf-8")
+        media = "application/json"
+    else:
+        buf = io.StringIO()
+        for k, val in meta.items():  # метадані — рядками-коментарями на початку файлу
+            if val is not None:
+                buf.write(f"# {k}: {val}\n")
+        w = csv.writer(buf, lineterminator="\n")
+        w.writerow(["country", "indicator", "breakdown", "period_start", "period_end", "value", "note"])
+        for o in obs:
+            w.writerow(
+                [
+                    o.country_code,
+                    o.indicator_code,
+                    csv_safe(o.breakdown),
+                    o.period_start.isoformat(),
+                    o.period_end.isoformat(),
+                    "" if o.value is None else o.value,
+                    csv_safe(o.note),
+                ]
+            )
+        body = ("﻿" + buf.getvalue()).encode("utf-8")  # BOM — щоб Excel показав кирилицю
+        media = "text/csv; charset=utf-8"
+    sha = hashlib.sha256(body).hexdigest()
+    exp = DataExport(
+        format=ExportFormat(format.upper()),
+        channel=ExportChannel.WEB,
+        records_count=len(obs),
+        file_hash=sha,
+        grant_id=decision.grant.id if decision.grant else None,
+        exported_by_id=user.id,
+    )
+    db.add(exp)
+    db.flush()
+    db.execute(data_export_versions.insert().values(export_id=exp.id, version_id=v.id))
+    audit.append(
+        db,
+        action=AuditAction.DATA_DOWNLOAD,
+        object_type="dataset",
+        object_id=d.id,
+        request_id=request_id(request),
+        actor_id=user.id,
+        actor_role=user.role,
+        on_behalf_of_id=user.organization_id,
+        details={
+            "export_id": str(exp.id),
+            "format": format,
+            "records": len(obs),
+            "file_sha256": sha,
+            "grant_id": meta["grant_id"],
+            "version_no": v.version_no,
+            "coverage": coverage,
+        },
+    )
+    db.commit()
+    name = f"gedh-{d.id.hex[:8]}-v{v.version_no}-{generated:%Y%m%d}.{format}"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{name}"',
+        "X-Content-SHA256": sha,
+        "X-Coverage": coverage,
+    }
+    if decision.grant:
+        headers["X-Grant-Id"] = str(decision.grant.id)
+    return Response(content=body, media_type=media, headers=headers)
 
 
 @router.get("/coverage")

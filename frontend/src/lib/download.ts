@@ -1,7 +1,7 @@
 // Завантаження захищеного файлу: запит із токеном, потім файл віддається браузеру.
 import { apiRaw } from './session';
 
-export async function blobFetch(path: string): Promise<void> {
+export async function blobFetch(path: string): Promise<Headers> {
   const res = await apiRaw(path);
   const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? 'file';
   const url = URL.createObjectURL(await res.blob());
@@ -10,4 +10,5 @@ export async function blobFetch(path: string): Promise<void> {
   a.download = name;
   a.click();
   URL.revokeObjectURL(url);
+  return res.headers;
 }

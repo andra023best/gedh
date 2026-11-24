@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../lib/authContext';
 import { errorText } from '../lib/messages';
+import { blobFetch } from '../lib/download';
 import { api } from '../lib/session';
 
 type Dataset = {
@@ -16,6 +17,7 @@ type Dataset = {
   is_synthetic: boolean;
   source_system: string | null;
   country_code: string | null;
+  category_code: string | null;
   owner: { name: string } | null;
   indicators: string[];
   current_version_no: number | null;
@@ -93,6 +95,7 @@ export function CatalogPage() {
             <th>Країна</th>
             <th>Постачальник</th>
             <th>Позначка</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
@@ -102,6 +105,11 @@ export function CatalogPage() {
               <td>{d.country_code}</td>
               <td>{d.owner?.name ?? '—'}</td>
               <td>{d.is_synthetic && <strong className="synthetic">СИНТЕТИЧНІ ДАНІ</strong>}</td>
+              <td>
+                {user?.role === 'ORG_REPRESENTATIVE' && (
+                  <Link to={`/requests?country=${d.country_code}&category=${d.category_code ?? ''}`}>Подати заявку</Link>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -182,6 +190,10 @@ export function OpenDataPage() {
               </tbody>
             </table>
           </div>
+          <p>
+            <button onClick={() => void blobFetch(`/datasets/${datasetId}/export?format=csv`)}>Вивантажити CSV</button>{' '}
+            <button onClick={() => void blobFetch(`/datasets/${datasetId}/export?format=json`)}>Вивантажити JSON</button>
+          </p>
           <p className="hint">
             «н/д» — джерело не має значення; інтерполяція не виконується. * — примітка (наведіть курсор), наприклад
             оцінка IMF або ставка ЄЦБ для країн єврозони.

@@ -10,6 +10,7 @@ import { api, logout, markConsentAccepted, post } from './lib/session';
 import AdminRegistrationsPage from './pages/AdminRegistrationsPage';
 import { CatalogPage, OpenDataPage } from './pages/DataPages';
 import { DgReviewPage, ProviderPage } from './pages/DatasetPages';
+import { GrantsPage, RequestsPage } from './pages/ExchangePages';
 import LoginPage from './pages/LoginPage';
 import ProfilePage from './pages/ProfilePage';
 import RegisterPage from './pages/RegisterPage';
@@ -73,6 +74,10 @@ function Nav() {
       <nav>
         <NavLink to="/catalog">Каталог</NavLink>
         {user && <NavLink to="/data">Дані</NavLink>}
+        {user && ['ORG_REPRESENTATIVE', 'ADMIN', 'DATA_PROVIDER'].includes(user.role) && (
+          <NavLink to="/requests">Заявки на дані</NavLink>
+        )}
+        {user && user.role !== 'ANALYST' && <NavLink to="/grants">Дозволи</NavLink>}
         {user?.role === 'DATA_PROVIDER' && <NavLink to="/provider">Мої набори</NavLink>}
         {user?.role === 'DG_OFFICER' && <NavLink to="/dg/review">Перевірка наборів</NavLink>}
         {user?.role === 'ADMIN' && <NavLink to="/admin/registrations">Заявки на реєстрацію</NavLink>}
@@ -181,6 +186,22 @@ export default function App() {
             element={
               <RequireAuth roles={['DG_OFFICER']}>
                 <DgReviewPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/requests"
+            element={
+              <RequireAuth roles={['ORG_REPRESENTATIVE', 'ADMIN', 'DATA_PROVIDER']}>
+                <RequestsPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/grants"
+            element={
+              <RequireAuth roles={['ORG_REPRESENTATIVE', 'ADMIN', 'DATA_PROVIDER', 'DG_OFFICER']}>
+                <GrantsPage />
               </RequireAuth>
             }
           />

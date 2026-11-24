@@ -31,13 +31,13 @@ flowchart TB
 |---|---|---|
 | `api/auth.py`, `api/me.py`, `core/security.py` | реєстрація, вхід, сесії, профіль | AuthModule |
 | `api/admin.py` | заявки на реєстрацію, організації | AuthModule (адміністрування, FR-03, FR-04) |
-| `api/data.py` (`can_read`) | каталог, перегляд значень; рішення «дозволено / заборонено» | DatasetModule; AccessPolicy (повністю — Е4) |
+| `api/data.py` | каталог, перегляд і вивантаження значень (рішення — `core/access.py`) | DatasetModule; AccessPolicy (`core/access.py`) |
 | `api/uploads.py`, `ingestion/upload.py` | завантаження, публікація | DatasetModule |
 | `ingestion/quality.py` | правила якості Q-01 – Q-11 | DQEngine |
 | `ingestion/sources.py`, `service.py`, `api/jobs.py` | конектори, імпорт | IngestionModule |
 | `core/audit.py` | журнал аудиту, ланцюжок хешів | AuditModule |
 | `core/mail.py` | листи | Notifier |
-| (Е4) | заявки, угоди, дозволи, вивантаження | ExchangeModule |
+| `api/exchange.py`, `core/access.py`, `core/agreement.py` | заявки, погодження, угоди, дозволи, завершення дозволів | ExchangeModule, AccessPolicy |
 
 ## Рівні доступу — для схеми «прямокутник, розрізаний діагоналями»
 Пропозиція для презентації: прямокутник «Платформа», розрізаний на смуги від загального до найвужчого доступу.

@@ -19,9 +19,14 @@ export default function LoginPage() {
     setError(null);
     try {
       const t = await login(email.trim(), password);
-      const home: Record<string, string> = { ADMIN: '/admin/registrations', DATA_PROVIDER: '/provider', DG_OFFICER: '/dg/review' };
+      const home: Record<string, string> = {
+        ADMIN: '/admin/registrations',
+        DATA_PROVIDER: '/provider',
+        DG_OFFICER: '/dg/review',
+        ORG_REPRESENTATIVE: '/requests',
+      };
       // Адресу чужого розділу, запам'ятовану після виходу іншого користувача, не використовуємо
-      const foreign = ['/admin', '/provider', '/dg'].some((p) => from.startsWith(p));
+      const foreign = ['/admin', '/provider', '/dg', '/requests', '/grants'].some((p) => from.startsWith(p));
       const target = home[t.user.role] ?? (foreign ? '/data' : from);
       navigate(target, { replace: true });
     } catch (err) {

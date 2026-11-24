@@ -151,7 +151,7 @@ def test_request_term_max_180_days(s):
 
 def test_grant_validity_max_180_days(s):
     req = new_request(s)
-    dsa = DataSharingAgreement(request_id=req.id, text_version="1.0", text_hash="0" * 64)
+    dsa = DataSharingAgreement(request_id=req.id, text_version="1.0", text_hash="0" * 64, text="тест")
     s.add(dsa)
     s.flush()
     now = datetime.now(UTC)

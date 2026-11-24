@@ -1344,6 +1344,31 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /grants/{id}/confirm-deletion:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [agreements]
+      summary: Підтвердити видалення даних за завершеним дозволом
+      description: |
+        DG-12, FR-44: після завершення строку отримувач підтверджує, що видалив отримані дані.
+        До підтвердження нові заявки організації не приймаються (409 `DELETION_CONFIRMATION_REQUIRED`, FR-45).
+      operationId: confirmDeletion
+      x-roles: [ORG_REPRESENTATIVE]
+      x-priority: Should
+      x-fr: [FR-44, FR-45]
+      x-uc: [UC-08, UC-21]
+      x-dg: [DG-12]
+      x-audit: DELETION_CONFIRM
+      responses:
+        "200":
+          description: Видалення підтверджено
+          content: { application/json: { schema: { $ref: "#/components/schemas/Grant" } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`INVALID_STATE` — дозвіл ще чинний"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
   # ================================================================ audit
   /audit/events:
     get:
@@ -1438,7 +1463,7 @@ paths:
       description: |
         Викликає GitHub Actions cron із заголовком `X-Job-Token` (секрет у GitHub Secrets і на Render).
         Дозволи з `valid_to < now` → `EXPIRED`; заявнику — запит підтвердити видалення даних (DG-12).
-        Ідемпотентно. Додатково `covers()` перевіряє строк на кожному зверненні, тож доступ припиняється
+        Також анулює пропозиції угод, не прийняті за 14 днів (UC-11 EX2). Ідемпотентно. Щодня о 02:15 UTC. Додатково `covers()` перевіряє строк на кожному зверненні, тож доступ припиняється
         вчасно навіть якщо cron не спрацював (DG-05).
       operationId: jobExpireGrants
       security:
@@ -1455,9 +1480,10 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [expired]
+                required: [expired, offers_cancelled]
                 properties:
                   expired: { type: integer, minimum: 0 }
+                  offers_cancelled: { type: integer, minimum: 0 }
         "401":
           description: "`JOB_TOKEN_INVALID`"
           content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
