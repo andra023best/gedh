@@ -21,4 +21,5 @@ jobs:
       - name: Завершити прострочені дозволи
         env:
           JOB_TOKEN: ${{ secrets.JOB_TOKEN }}
-        run: curl -fsS -X POST -H "X-Job-Token: $JOB_TOKEN" https://gedh.vercel.app/api/internal/jobs/expire-grants
+        run: |
+          curl -fsS -X POST -H "X-Job-Token: $JOB_TOKEN" https://gedh.vercel.app/api/internal/jobs/expire-grants
