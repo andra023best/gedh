@@ -9,6 +9,7 @@ import { useAuth } from './lib/authContext';
 import { ROLE_UK } from './lib/messages';
 import { api, logout, markConsentAccepted, post } from './lib/session';
 import AdminRegistrationsPage from './pages/AdminRegistrationsPage';
+import { ComparePage, CountryPage, CoverageMap, IndicatorPage } from './pages/AnalyticsPages';
 import AuditPage from './pages/AuditPage';
 import { CatalogPage, OpenDataPage } from './pages/DataPages';
 import { DgReviewPage, ProviderPage } from './pages/DatasetPages';
@@ -94,6 +95,7 @@ function Nav() {
       <nav>
         <NavLink to="/catalog">Каталог</NavLink>
         {user && <NavLink to="/data">Дані</NavLink>}
+        {user && <NavLink to="/compare">Порівняння</NavLink>}
         {user && ['ORG_REPRESENTATIVE', 'ADMIN', 'DATA_PROVIDER'].includes(user.role) && (
           <NavLink to="/requests">Заявки на дані</NavLink>
         )}
@@ -152,7 +154,8 @@ function HomePage() {
       <p>
         <Link to="/catalog">Каталог даних</Link> — опис усіх наборів без значень.
       </p>
-      <p className="hint">Карта й профілі країн з'являться на наступних етапах.</p>
+      <h2>Карта покриття</h2>
+      <CoverageMap />
     </section>
   );
 }
@@ -205,6 +208,23 @@ export default function App() {
             }
           />
           <Route path="/catalog" element={<CatalogPage />} />
+          <Route path="/indicators/:code" element={<IndicatorPage />} />
+          <Route
+            path="/countries/:code"
+            element={
+              <RequireAuth>
+                <CountryPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/compare"
+            element={
+              <RequireAuth>
+                <ComparePage />
+              </RequireAuth>
+            }
+          />
           <Route
             path="/data"
             element={

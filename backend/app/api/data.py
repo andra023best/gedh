@@ -415,18 +415,19 @@ def export(
 
 @router.get("/coverage")
 def coverage(db: Session = Depends(get_db)) -> list[dict]:
-    """Скільки відкритих показників має дані для кожної країни (для майбутньої карти; без значень)."""
+    """Карта покриття (UC-04, FR-06): скільки й які відкриті показники мають дані в країні; без значень."""
     current = (
         select(DatasetVersion.id)
         .join(OpenDataset, OpenDataset.id == DatasetVersion.dataset_id)
         .where(DatasetVersion.status == VersionStatus.PUBLISHED)
     )
     rows = db.execute(
-        select(Observation.country_code, func.count(func.distinct(Observation.indicator_code)))
-        .where(Observation.version_id.in_(current))
+        select(Observation.country_code, func.array_agg(func.distinct(Observation.indicator_code)))
+        .where(Observation.version_id.in_(current), Observation.value.is_not(None))
         .group_by(Observation.country_code)
     ).all()
-    return [{"country": c, "indicators": n} for c, n in sorted(rows)]
+    # UC-04 крок 3 і 5: кількість і перелік показників (без значень) — для підказки й панелі гостя на карті
+    return [{"country": c, "indicators": len(codes), "codes": sorted(codes)} for c, codes in sorted(rows)]
 
 
 # ---------------------------------------------------------------------------- походження (FR-33)

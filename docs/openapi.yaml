@@ -38,6 +38,8 @@ servers:
     description: локальна розробка (проксі Vite → uvicorn :8010)
 
 tags:
+  - name: analytics
+    description: Профіль країни й картка показника (Е6б, S-35)
   - name: service
     description: Службові маршрути
   - name: auth
@@ -764,7 +766,7 @@ paths:
   /coverage:
     get:
       tags: [reference]
-      summary: Покриття — скільки відкритих показників має дані для кожної країни (без значень)
+      summary: Покриття — скільки й які відкриті показники мають дані в кожній країні (без значень)
       description: Для карти «зелені / сірі країни» (UC-04). Публічний, не журналюється (нотатки, розд. 6).
       operationId: getCoverage
       security: []
@@ -781,10 +783,103 @@ paths:
                 type: array
                 items:
                   type: object
-                  required: [country, indicators]
+                  required: [country, indicators, codes]
                   properties:
                     country: { type: string }
                     indicators: { type: integer }
+                    codes:
+                      type: array
+                      items: { type: string }
+                      description: "Коди показників із даними — для панелі гостя (UC-04 крок 5), без значень"
+
+  /countries/{code}/profile:
+    parameters:
+      - { name: code, in: path, required: true, schema: { type: string, pattern: "^[A-Za-z]{3}$" } }
+    get:
+      tags: [analytics]
+      summary: Профіль країни
+      description: |
+        UC-05, FR-08 (S-35): для кожного відкритого показника — ряд значень, останнє значення й зміна до попереднього
+        періоду, джерело, дата оновлення, версія й ліцензія; закриті набори країни — лише опис і позначка «доступ за
+        заявкою» (AC2). Один агрегований запит (NFR-02). Перегляд записується (`DATA_VIEW`, object_type `country`).
+      operationId: getCountryProfile
+      x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-priority: Should
+      x-fr: [FR-08]
+      x-uc: [UC-05]
+      x-dg: [DG-13]
+      x-audit: DATA_VIEW (view = country_profile)
+      responses:
+        "200":
+          description: Профіль
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [country, indicators, restricted]
+                properties:
+                  country: { type: object }
+                  indicators:
+                    type: array
+                    items:
+                      type: object
+                      required: [code, name_ua, unit, scale, frequency, dataset_id, version_no, series, latest, change]
+                      properties:
+                        code: { type: string }
+                        series:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              period: { type: string }
+                              start: { type: string, format: date }
+                              value: { type: [number, "null"] }
+                              note: { type: [string, "null"] }
+                        latest: { type: [object, "null"] }
+                        previous: { type: [object, "null"] }
+                        change: { type: [number, "null"] }
+                  restricted: { type: array, items: { $ref: "#/components/schemas/DatasetSummary" } }
+        "401": { description: "`NOT_AUTHENTICATED`" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /indicators/{code}:
+    parameters:
+      - { name: code, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [analytics]
+      summary: Картка показника (без значень)
+      description: |
+        FR-09, UC-04 AC1 (S-35): код, назва, визначення, одиниця, масштаб, частота, джерело, класифікація, ліцензія,
+        набори з цим показником і покриття країн (роки від — до). Публічно, без значень і без журналу.
+      operationId: getIndicatorCard
+      security: []
+      x-roles: [GUEST]
+      x-priority: Should
+      x-fr: [FR-09]
+      x-uc: [UC-04]
+      x-dg: [DG-13]
+      responses:
+        "200":
+          description: Картка
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, name_ua, definition, unit, frequency, classification, datasets, coverage]
+                properties:
+                  code: { type: string }
+                  classification: { type: [string, "null"], enum: [OPEN, RESTRICTED, null] }
+                  source: { type: [string, "null"] }
+                  datasets: { type: array, items: { $ref: "#/components/schemas/DatasetSummary" } }
+                  coverage:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        country: { type: string }
+                        from: { type: string }
+                        to: { type: string }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   # ================================================================ data
   /datasets/{id}/observations:

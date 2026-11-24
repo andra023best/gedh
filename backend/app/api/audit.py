@@ -170,6 +170,7 @@ def build_query(db: Session, f: Filters) -> tuple[Select, uuid.UUID | None, bool
                     _ids(select(DataSharingAgreement.id).where(DataSharingAgreement.request_id.in_(req_ids)))
                 ),
                 (E.object_type == "organization") & E.object_id.in_(_ids(org_ids)),
+                (E.object_type == "country") & (E.object_id == f.country),  # профіль країни (UC-05)
                 (E.object_type == "user")
                 & E.object_id.in_(_ids(select(User.id).where(User.country_code == f.country))),
                 E.on_behalf_of_id.in_(org_ids),

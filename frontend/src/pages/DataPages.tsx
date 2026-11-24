@@ -78,7 +78,15 @@ export function CatalogPage() {
         <tbody>
           {open.map((d) => (
             <tr key={d.id}>
-              <td>{d.title_ua}</td>
+              <td>
+                {d.indicators[0] ? <Link to={`/indicators/${d.indicators[0]}`}>{d.title_ua}</Link> : d.title_ua}
+                {user && (
+                  <>
+                    {' '}
+                    · <Link to={`/datasets/${d.id}/lineage`}>походження</Link>
+                  </>
+                )}
+              </td>
               <td>{d.source_system}</td>
               <td>{d.licence}</td>
               <td>{d.current_version_no ?? 'ще не імпортовано'}</td>

@@ -223,3 +223,172 @@ code.hash {
 ol.lineage li {
   margin-bottom: 0.4rem;
 }
+
+/* Е6б: карта, картки, графік, рейтинг (функціональні стилі; дизайн — окремо) */
+.map-wrap {
+  position: relative;
+  max-width: 960px;
+}
+.world-map {
+  width: 100%;
+  height: auto;
+  background: #f4f8fb;
+}
+.world-map .country {
+  stroke: #fff;
+  stroke-width: 0.5;
+}
+.world-map .no-data {
+  fill: #d6d6d6;
+}
+.world-map .has-data {
+  fill: #3a9d5d;
+  cursor: pointer;
+}
+.world-map .has-data:hover,
+.world-map .selected {
+  fill: #23733f;
+}
+.world-map .no-data:hover {
+  fill: #bdbdbd;
+}
+.map-tip {
+  position: absolute;
+  pointer-events: none;
+  background: #fff;
+  border: 1px solid #999;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.85rem;
+}
+.map-legend {
+  font-size: 0.85rem;
+}
+.swatch {
+  display: inline-block;
+  width: 0.8rem;
+  height: 0.8rem;
+  vertical-align: middle;
+}
+.swatch.has-data {
+  background: #3a9d5d;
+}
+.swatch.no-data {
+  background: #d6d6d6;
+}
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  padding: 0.5rem;
+  border: 1px solid #ccc;
+  background: #fff;
+  cursor: pointer;
+}
+.stat-card.active {
+  border-color: #23733f;
+  outline: 1px solid #23733f;
+}
+.stat-name {
+  font-size: 0.85rem;
+}
+.stat-value {
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+.up {
+  color: #23733f;
+}
+.down {
+  color: #b3261e;
+}
+.chart svg {
+  width: 100%;
+  max-width: 760px;
+  height: auto;
+}
+.chart .grid line {
+  stroke: #e5e5e5;
+}
+.chart text {
+  font-size: 11px;
+  fill: #555;
+}
+.chart path {
+  stroke-width: 2;
+}
+.chart .cursor {
+  stroke: #999;
+  stroke-dasharray: 3 3;
+}
+.series-0 path,
+.series-0 .swatch {
+  stroke: #1f6fb2;
+  background: #1f6fb2;
+}
+.series-0 circle {
+  fill: #1f6fb2;
+}
+.series-1 path,
+.series-1 .swatch {
+  stroke: #d9822b;
+  background: #d9822b;
+}
+.series-1 circle {
+  fill: #d9822b;
+}
+.series-2 path,
+.series-2 .swatch {
+  stroke: #3a9d5d;
+  background: #3a9d5d;
+}
+.series-2 circle {
+  fill: #3a9d5d;
+}
+.series-3 path,
+.series-3 .swatch {
+  stroke: #8e44ad;
+  background: #8e44ad;
+}
+.series-3 circle {
+  fill: #8e44ad;
+}
+.chart-legend .legend {
+  margin-right: 1rem;
+}
+.chip {
+  display: inline-block;
+  border: 1px solid #ccc;
+  padding: 0.1rem 0.4rem;
+  margin-right: 0.4rem;
+}
+.ranking ol li {
+  display: grid;
+  grid-template-columns: 180px 1fr 140px;
+  gap: 0.5rem;
+  align-items: center;
+}
+.bar-track {
+  background: #f0f0f0;
+  height: 0.8rem;
+}
+.bar {
+  display: block;
+  height: 100%;
+  background: #1f6fb2;
+}
+.bar.neg {
+  background: #b3261e;
+}
+.rank-value {
+  text-align: right;
+}
+.ranking li.picked .rank-name {
+  font-weight: 700;
+}
