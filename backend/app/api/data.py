@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.api.serializers import iso, org_public
 from app.core import access, audit
-from app.core.deps import current_user, get_db, request_id
+from app.core.deps import api_user, get_db, request_id
 from app.core.errors import ApiError
 from app.ingestion.sources import SPECS
 from app.models.datasets import (
@@ -85,6 +85,7 @@ def list_datasets(
     country: str | None = None,
     category: str | None = None,
     kind: str | None = Query(None, pattern="^(OPEN|RESTRICTED)$"),
+    _: User = Depends(api_user),  # S-36: каталог — лише після входу
     db: Session = Depends(get_db),
 ) -> list[dict]:
     q = select(Dataset).order_by(Dataset.kind, Dataset.title_ua)
@@ -99,7 +100,7 @@ def list_datasets(
 
 
 @router.get("/catalog/datasets/{dataset_id}")
-def get_dataset(dataset_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+def get_dataset(dataset_id: uuid.UUID, _: User = Depends(api_user), db: Session = Depends(get_db)) -> dict:
     d = db.get(Dataset, dataset_id)
     if d is None:
         raise ApiError(404, "NOT_FOUND")
@@ -246,7 +247,7 @@ def observations(
     period_from: date | None = None,
     period_to: date | None = None,
     version: int | None = Query(None, ge=1),
-    user: User = Depends(current_user),
+    user: User = Depends(api_user),
     db: Session = Depends(get_db),
 ) -> dict:
     d, v, obs, decision, coverage = load_for_user(
@@ -276,6 +277,7 @@ def observations(
             "basis": decision.basis,
             "grant_id": str(decision.grant.id) if decision.grant else None,
             "coverage": coverage,
+            "channel": getattr(request.state, "channel", "WEB"),
         },
     )
     db.commit()
@@ -314,7 +316,7 @@ def export(
     countries: str | None = None,
     period_from: date | None = None,
     period_to: date | None = None,
-    user: User = Depends(current_user),
+    user: User = Depends(api_user),
     db: Session = Depends(get_db),
 ) -> Response:
     """UC-07, FR-11, FR-27: файл з метаданими й SHA-256; для закритих — ідентифікатор дозволу й позначка."""
@@ -373,7 +375,8 @@ def export(
     sha = hashlib.sha256(body).hexdigest()
     exp = DataExport(
         format=ExportFormat(format.upper()),
-        channel=ExportChannel.WEB,
+        # FR-12: вивантаження через API-ключ позначається каналом API
+        channel=ExportChannel.API if getattr(request.state, "channel", None) == "API" else ExportChannel.WEB,
         records_count=len(obs),
         file_hash=sha,
         grant_id=decision.grant.id if decision.grant else None,
@@ -414,8 +417,8 @@ def export(
 
 
 @router.get("/coverage")
-def coverage(db: Session = Depends(get_db)) -> list[dict]:
-    """Карта покриття (UC-04, FR-06): скільки й які відкриті показники мають дані в країні; без значень."""
+def coverage(_: User = Depends(api_user), db: Session = Depends(get_db)) -> list[dict]:
+    """Карта покриття (UC-04, FR-06): скільки й які показники мають дані в країні; після входу (S-36)."""
     current = (
         select(DatasetVersion.id)
         .join(OpenDataset, OpenDataset.id == DatasetVersion.dataset_id)
@@ -433,7 +436,7 @@ def coverage(db: Session = Depends(get_db)) -> list[dict]:
 # ---------------------------------------------------------------------------- походження (FR-33)
 @router.get("/datasets/{dataset_id}/lineage")
 def lineage(
-    dataset_id: uuid.UUID, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)
+    dataset_id: uuid.UUID, request: Request, user: User = Depends(api_user), db: Session = Depends(get_db)
 ) -> dict:
     """FR-33, DG-16, UC-05 крок 6, UC-15 AC2: джерело → імпорт / завантаження → перевірка → версія →
     дозволи → вивантаження.

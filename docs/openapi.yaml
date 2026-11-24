@@ -38,6 +38,8 @@ servers:
     description: локальна розробка (проксі Vite → uvicorn :8010)
 
 tags:
+  - name: admin-config
+    description: Конектори й довідники (UC-20, S-37)
   - name: analytics
     description: Профіль країни й картка показника (Е6б, S-35)
   - name: service
@@ -728,8 +730,8 @@ paths:
       summary: Каталог наборів — лише метадані, без значень
       description: Закриті набори позначено `is_synthetic` і «доступ за заявкою» (FR-27, UC-05 AC2).
       operationId: listDatasets
-      security: []
-      x-roles: [GUEST]
+      x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-api-key: true
       x-priority: Should
       x-fr: [FR-09, FR-27]
       x-dg: [DG-04, DG-13]
@@ -753,8 +755,8 @@ paths:
       tags: [reference]
       summary: Метадані набору й опубліковані версії
       operationId: getDataset
-      security: []
-      x-roles: [GUEST]
+      x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-api-key: true
       x-priority: Should
       x-fr: [FR-09, FR-27]
       responses:
@@ -767,10 +769,10 @@ paths:
     get:
       tags: [reference]
       summary: Покриття — скільки й які відкриті показники мають дані в кожній країні (без значень)
-      description: Для карти «зелені / сірі країни» (UC-04). Публічний, не журналюється (нотатки, розд. 6).
+      description: Для карти «зелені / сірі країни» (UC-04). З S-36 — лише після входу; не журналюється.
       operationId: getCoverage
-      security: []
-      x-roles: [GUEST]
+      x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-api-key: true
       x-priority: Should
       x-fr: [FR-06, FR-07]
       x-uc: [UC-04]
@@ -803,6 +805,7 @@ paths:
         періоду, джерело, дата оновлення, версія й ліцензія; закриті набори країни — лише опис і позначка «доступ за
         заявкою» (AC2). Один агрегований запит (NFR-02). Перегляд записується (`DATA_VIEW`, object_type `country`).
       operationId: getCountryProfile
+      x-api-key: true
       x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
       x-priority: Should
       x-fr: [FR-08]
@@ -852,8 +855,8 @@ paths:
         FR-09, UC-04 AC1 (S-35): код, назва, визначення, одиниця, масштаб, частота, джерело, класифікація, ліцензія,
         набори з цим показником і покриття країн (роки від — до). Публічно, без значень і без журналу.
       operationId: getIndicatorCard
-      security: []
-      x-roles: [GUEST]
+      x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-api-key: true
       x-priority: Should
       x-fr: [FR-09]
       x-uc: [UC-04]
@@ -895,6 +898,7 @@ paths:
           або DG-офіцер для версії на перевірці.
         Якщо дозвіл покриває лише частину періоду, повертається покрита частина і `coverage: PARTIAL` (UC-16 AC1).
       operationId: getObservations
+      x-api-key: true
       x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
       x-fr: [FR-26, FR-27]
       x-uc: [UC-16]
@@ -926,6 +930,7 @@ paths:
         SHA-256 файлу — у заголовку `X-Content-SHA256` і в журналі аудиту (FR-11).
         CSV: значення, що починаються з `= + - @`, екрануються (захист від CSV injection).
       operationId: exportDataset
+      x-api-key: true
       x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
       x-fr: [FR-11, FR-26, FR-27]
       x-uc: [UC-07, UC-16]
@@ -1009,6 +1014,7 @@ paths:
         - лише попередження → `QUARANTINE`, потрібне підтвердження (`/confirm-warnings`);
         - без порушень → `PENDING_REVIEW` (черга DG-офіцера).
       operationId: uploadDataset
+      x-api-key: true  # FR-37: постачальник — і через API-ключ (S-37)
       x-roles: [DATA_PROVIDER]
       x-fr: [FR-21, FR-22]
       x-uc: [UC-12, UC-18]
@@ -1515,6 +1521,7 @@ paths:
         значень (інакше 403 і запис DENIED). Чужі дозволи й вивантаження бачать лише DG-офіцер і організація-власник
         (`scope: all`); отримувач — свої (`scope: own`).
       operationId: getDatasetLineage
+      x-api-key: true
       x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
       x-priority: Should
       x-fr: [FR-33]
@@ -1685,6 +1692,268 @@ paths:
         "410": { description: "`TOKEN_EXPIRED`" }
         "422": { description: "`WEAK_PASSWORD`" }
 
+  # ================================================================ Е6в (S-37): конектори, довідники, API-ключі
+  /admin/connectors:
+    get:
+      tags: [admin-config]
+      summary: Конектори імпорту з останніми запусками
+      description: "UC-20 кроки 1–2 (FR-17): назва, розклад (cron), стан, наступний запуск, 5 останніх запусків."
+      operationId: listConnectors
+      x-roles: [ADMIN]
+      x-priority: Should
+      x-fr: [FR-17]
+      x-uc: [UC-20]
+      responses:
+        "200": { description: Конектори }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /admin/connectors/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    patch:
+      tags: [admin-config]
+      summary: Змінити розклад або увімкнути / вимкнути конектор
+      description: |
+        UC-20 кроки 3–5. Розклад — cron із 5 полів; неправильний вираз — 422 `INVALID_SCHEDULE` з причиною, нічого не
+        змінюється (EX1). Щоденний планувальник запускає лише конектори, чий розклад припадає на поточний день.
+      operationId: updateConnector
+      x-roles: [ADMIN]
+      x-priority: Should
+      x-fr: [FR-17]
+      x-uc: [UC-20]
+      x-audit: CONFIG_CHANGE (старе й нове значення)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                schedule: { type: string, maxLength: 100 }
+                is_enabled: { type: boolean }
+      responses:
+        "200": { description: Конектор }
+        "422": { description: "`INVALID_SCHEDULE` або `NOTHING_TO_UPDATE`" }
+
+  /admin/connectors/{id}/runs:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [admin-config]
+      summary: Журнал запусків конектора
+      operationId: listConnectorRuns
+      x-roles: [ADMIN]
+      x-priority: Should
+      x-fr: [FR-17]
+      x-uc: [UC-20]
+      responses:
+        "200": { description: Запуски — від нових до старих }
+
+  /admin/connectors/{id}/run:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [admin-config]
+      summary: Запустити конектор вручну
+      description: "UC-20 AC1 → UC-14: запуск у фоні; результат — у журналі запусків."
+      operationId: runConnector
+      x-roles: [ADMIN]
+      x-priority: Should
+      x-fr: [FR-17]
+      x-uc: [UC-20, UC-14]
+      x-audit: CONFIG_CHANGE (manual_run) і DATASET_PUBLISH (результат імпорту)
+      responses:
+        "202": { description: Запуск розпочато }
+
+  /admin/connectors/{id}/upload:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [admin-config]
+      summary: Резервний імпорт з офіційного CSV-експорту джерела
+      description: |
+        UC-20 AC4: файл World Bank як є або `country,year,value` (IMF, BIS); до 5 МБ; зберігається з SHA-256 (90 днів);
+        далі ті самі кроки UC-14 — гармонізація, перевірки якості, нова версія лише за зміни значень.
+      operationId: uploadConnectorCsv
+      x-roles: [ADMIN]
+      x-priority: Should
+      x-fr: [FR-17]
+      x-uc: [UC-20, UC-14]
+      x-audit: CONFIG_CHANGE (manual_run) і DATASET_PUBLISH
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "200": { description: Запуск імпорту }
+        "413": { description: "`FILE_TOO_LARGE`" }
+        "422": { description: "`UNSUPPORTED_CSV` з причиною" }
+
+  /admin/countries:
+    post:
+      tags: [admin-config]
+      summary: Додати країну
+      description: "UC-20 AC2 (FR-43): ISO3, назви, alpha-2 (для BIS), числовий код (для карти); після імпорту — зелена на карті."
+      operationId: createCountry
+      x-roles: [ADMIN]
+      x-priority: Should
+      x-fr: [FR-43]
+      x-uc: [UC-20]
+      x-audit: CONFIG_CHANGE
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, name_ua, name_en]
+              properties:
+                code: { type: string, pattern: "^[A-Z]{3}$" }
+                name_ua: { type: string }
+                name_en: { type: string }
+                iso2: { type: string, pattern: "^[A-Z]{2}$" }
+                iso_numeric: { type: string, pattern: "^[0-9]{3}$" }
+      responses:
+        "201": { description: Країна }
+        "409": { description: "`ALREADY_EXISTS`" }
+
+  /admin/countries/{code}:
+    parameters:
+      - { name: code, in: path, required: true, schema: { type: string } }
+    patch:
+      tags: [admin-config]
+      summary: Змінити країну (назви, коди, активність)
+      operationId: updateCountry
+      x-roles: [ADMIN]
+      x-priority: Should
+      x-fr: [FR-43]
+      x-uc: [UC-20]
+      x-audit: CONFIG_CHANGE (старе й нове значення)
+      responses:
+        "200": { description: Країна }
+
+  /admin/indicators:
+    get:
+      tags: [admin-config]
+      summary: Усі показники, зокрема неактивні
+      operationId: adminListIndicators
+      x-roles: [ADMIN]
+      x-priority: Should
+      x-fr: [FR-43]
+      responses:
+        "200": { description: Показники з діапазонами Q-06 / Q-07 }
+    post:
+      tags: [admin-config]
+      summary: Додати показник
+      description: "UC-20 AC3: код, назви, визначення, одиниця, масштаб, частота, діапазони Q-06 / Q-07 (422 `INVALID_RANGES`)."
+      operationId: createIndicator
+      x-roles: [ADMIN]
+      x-priority: Should
+      x-fr: [FR-43]
+      x-uc: [UC-20]
+      x-audit: CONFIG_CHANGE
+      responses:
+        "201": { description: Показник }
+        "409": { description: "`ALREADY_EXISTS`" }
+
+  /admin/indicators/{code}:
+    parameters:
+      - { name: code, in: path, required: true, schema: { type: string } }
+    patch:
+      tags: [admin-config]
+      summary: Змінити або деактивувати показник
+      description: "Частоту показника з даними змінити не можна (409 `INDICATOR_HAS_DATA`)."
+      operationId: updateIndicator
+      x-roles: [ADMIN]
+      x-priority: Should
+      x-fr: [FR-43]
+      x-uc: [UC-20]
+      x-audit: CONFIG_CHANGE (старе й нове значення)
+      responses:
+        "200": { description: Показник }
+    delete:
+      tags: [admin-config]
+      summary: Видалити показник без даних
+      description: "UC-20 EX2: показник, для якого є дані або конектор, — 409 `INDICATOR_HAS_DATA`, лише деактивація."
+      operationId: deleteIndicator
+      x-roles: [ADMIN]
+      x-priority: Should
+      x-fr: [FR-43]
+      x-uc: [UC-20]
+      x-audit: CONFIG_CHANGE
+      responses:
+        "204": { description: Видалено }
+        "409": { description: "`INDICATOR_HAS_DATA`" }
+
+  /admin/categories:
+    post:
+      tags: [admin-config]
+      summary: Додати категорію закритих даних
+      operationId: createCategory
+      x-roles: [ADMIN]
+      x-priority: Should
+      x-fr: [FR-43]
+      x-uc: [UC-20]
+      x-audit: CONFIG_CHANGE
+      responses:
+        "201": { description: Категорія }
+
+  /admin/categories/{code}:
+    parameters:
+      - { name: code, in: path, required: true, schema: { type: string } }
+    patch:
+      tags: [admin-config]
+      summary: Змінити назви категорії
+      operationId: updateCategory
+      x-roles: [ADMIN]
+      x-priority: Should
+      x-fr: [FR-43]
+      x-uc: [UC-20]
+      x-audit: CONFIG_CHANGE (старе й нове значення)
+      responses:
+        "200": { description: Категорія }
+
+  /me/api-keys:
+    get:
+      tags: [me]
+      summary: Мої API-ключі (лише префікси)
+      operationId: listApiKeys
+      x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-priority: Could
+      x-fr: [FR-12, FR-37]
+      responses:
+        "200": { description: Ключі без секретів }
+    post:
+      tags: [me]
+      summary: Створити API-ключ
+      description: "FR-12, FR-37: повний ключ — лише в цій відповіді; до 3 чинних (409 `API_KEY_LIMIT`)."
+      operationId: createApiKey
+      x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-priority: Could
+      x-fr: [FR-12, FR-37]
+      x-audit: CONFIG_CHANGE (API_KEY_CREATED, префікс)
+      responses:
+        "201": { description: "Ключ (`key`) і його префікс" }
+
+  /me/api-keys/{id}/revoke:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [me]
+      summary: Відкликати API-ключ
+      operationId: revokeApiKey
+      x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-priority: Could
+      x-fr: [FR-12, FR-37]
+      x-audit: CONFIG_CHANGE (API_KEY_REVOKED)
+      responses:
+        "200": { description: Ключ відкликано }
+
   # ================================================================ audit
   /audit/events:
     get:
@@ -1846,6 +2115,7 @@ paths:
       x-audit: DATASET_PUBLISH (для кожного запуску конектора)
       parameters:
         - { name: indicator, in: query, schema: { type: string } }
+        - { name: scheduled, in: query, description: "Щоденний виклик: лише конектори, чий cron припадає на сьогодні (S-37)", schema: { type: boolean, default: false } }
       responses:
         "202":
           description: Імпорт запущено
@@ -1918,6 +2188,13 @@ paths:
 
 components:
   securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        FR-12, FR-37 (S-37): ключ `gedh_<префікс>_<секрет>` з профілю; у БД — лише префікс і SHA-256. Приймають лише
+        операції з `x-api-key: true` (читання даних) і завантаження набору постачальником. 60 запитів/хв на ключ (NFR-18).
     bearer:
       type: http
       scheme: bearer

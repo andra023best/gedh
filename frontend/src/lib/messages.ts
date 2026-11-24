@@ -37,6 +37,13 @@ const UK: Record<string, string> = {
   ACCESS_DENIED: 'Немає доступу до цього набору: потрібен чинний дозвіл.',
   GRANT_SUSPENDED: 'Дозвіл призупинено DG-офіцером.',
   GRANT_EXPIRED: 'Строк дозволу минув.',
+  INVALID_SCHEDULE: 'Неправильний розклад (cron) — зміни не збережено.',
+  UNSUPPORTED_CSV: 'Файл не схожий на CSV-експорт джерела.',
+  INDICATOR_HAS_DATA: 'Для показника вже є дані — його можна лише деактивувати.',
+  INVALID_RANGES: 'Діапазони суперечать один одному: типовий має лежати в межах можливого.',
+  ALREADY_EXISTS: 'Запис із таким кодом уже є.',
+  API_KEY_LIMIT: 'Уже є 3 чинні ключі — спершу відкличте непотрібний.',
+  API_KEY_INVALID: 'API-ключ недійсний або відкликаний.',
 };
 
 export const STATUS_UK: Record<string, string> = {

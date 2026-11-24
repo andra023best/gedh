@@ -8,6 +8,8 @@ import { RequireAuth } from './lib/auth';
 import { useAuth } from './lib/authContext';
 import { ROLE_UK } from './lib/messages';
 import { api, logout, markConsentAccepted, post } from './lib/session';
+import AboutPage, { AboutContent } from './pages/AboutPage';
+import { ConnectorsPage, ReferencePage } from './pages/AdminConfigPages';
 import AdminRegistrationsPage from './pages/AdminRegistrationsPage';
 import { ComparePage, CountryPage, CoverageMap, IndicatorPage } from './pages/AnalyticsPages';
 import AuditPage from './pages/AuditPage';
@@ -93,7 +95,8 @@ function Nav() {
         GEDH
       </Link>
       <nav>
-        <NavLink to="/catalog">Каталог</NavLink>
+        {!user && <NavLink to="/about">Про платформу</NavLink>}
+        {user && <NavLink to="/catalog">Каталог</NavLink>}
         {user && <NavLink to="/data">Дані</NavLink>}
         {user && <NavLink to="/compare">Порівняння</NavLink>}
         {user && ['ORG_REPRESENTATIVE', 'ADMIN', 'DATA_PROVIDER'].includes(user.role) && (
@@ -104,9 +107,11 @@ function Nav() {
         {user?.role === 'DG_OFFICER' && <NavLink to="/dg/review">Перевірка наборів</NavLink>}
         {user?.role === 'DG_OFFICER' && <NavLink to="/audit">Журнал аудиту</NavLink>}
         {user?.role === 'ADMIN' && <NavLink to="/admin/registrations">Заявки на реєстрацію</NavLink>}
+        {user?.role === 'ADMIN' && <NavLink to="/admin/connectors">Конектори</NavLink>}
+        {user?.role === 'ADMIN' && <NavLink to="/admin/reference">Довідники</NavLink>}
         {user && <NotificationsLink />}
         {user && <NavLink to="/profile">Профіль</NavLink>}
-        <NavLink to="/system">Стан системи</NavLink>
+        {user?.role === 'ADMIN' && <NavLink to="/system">Стан системи</NavLink>}
       </nav>
       <div className="who">
         {user ? (
@@ -134,25 +139,25 @@ function Nav() {
 function HomePage() {
   const { user } = useAuth();
   const notice = (useLocation().state as { notice?: string } | null)?.notice;
+  // S-36: гостю — лише опис платформи й реєстрація; карта, каталог і дані — після входу
+  if (!user)
+    return (
+      <section>
+        {notice && <p className="ok">{notice}</p>}
+        <h1>Global Economic Data Hub</h1>
+        <AboutContent />
+        <p>
+          <Link to="/register">Зареєструватися</Link> або <Link to="/login">увійти</Link>.
+        </p>
+      </section>
+    );
   return (
     <section>
       {notice && <p className="ok">{notice}</p>}
       <h1>Global Economic Data Hub</h1>
-      <p>
-        Платформа керованого обміну макроекономічними даними: відкриті показники World Bank, IMF і BIS для 25 країн та
-        закриті набори постачальників, доступні лише за погодженою заявкою й угодою.
-      </p>
       <p className="hint">
-        Навчальний проєкт групи ОІ-34. Закриті набори на платформі — <strong>синтетичні дані</strong>, не офіційна
-        статистика.
-      </p>
-      {!user && (
-        <p>
-          <Link to="/register">Зареєструватися</Link> або <Link to="/login">увійти</Link>.
-        </p>
-      )}
-      <p>
-        <Link to="/catalog">Каталог даних</Link> — опис усіх наборів без значень.
+        Відкриті показники World Bank, IMF і BIS для 25 країн. Закриті набори — лише за заявкою й угодою; на платформі
+        вони <strong>синтетичні</strong>. <Link to="/catalog">Каталог даних</Link> · <Link to="/about">Про платформу</Link>
       </p>
       <h2>Карта покриття</h2>
       <CoverageMap />
@@ -207,8 +212,39 @@ export default function App() {
               </RequireAuth>
             }
           />
-          <Route path="/catalog" element={<CatalogPage />} />
-          <Route path="/indicators/:code" element={<IndicatorPage />} />
+          <Route path="/about" element={<AboutPage />} />
+          <Route
+            path="/admin/connectors"
+            element={
+              <RequireAuth roles={['ADMIN']}>
+                <ConnectorsPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/admin/reference"
+            element={
+              <RequireAuth roles={['ADMIN']}>
+                <ReferencePage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/catalog"
+            element={
+              <RequireAuth>
+                <CatalogPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/indicators/:code"
+            element={
+              <RequireAuth>
+                <IndicatorPage />
+              </RequireAuth>
+            }
+          />
           <Route
             path="/countries/:code"
             element={

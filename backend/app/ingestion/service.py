@@ -20,7 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core import audit
-from app.ingestion import quality, sources
+from app.ingestion import quality, schedule, sources
 from app.models.datasets import DatasetVersion, Observation
 from app.models.enums import AuditAction, AuditResult, RunStatus, RunTrigger, VersionStatus
 from app.models.ingestion import Connector, ImportRun, QualityIssue, QualityReport
@@ -92,22 +92,32 @@ def run_connector(
     get: Callable[[str], bytes] = sources.http_get,
     sleep=time.sleep,
     today: date | None = None,
+    result: sources.FetchResult | None = None,
 ) -> ImportRun:
+    """Запуск конектора (UC-14).
+
+    `result` — уже розібраний файл резервного імпорту (UC-20 AC4) замість запиту до API.
+    """
     today = today or date.today()
     indicator_code = connector.name.split()[-1]  # «WB GDP_USD» → GDP_USD
     spec = sources.SPECS[indicator_code]
-    countries = sorted(db.scalars(select(Country.code).where(Country.is_active)))
+    active = db.scalars(select(Country).where(Country.is_active)).all()
+    countries = sorted(c.code for c in active)
+    # S-37: коди alpha-2 країн, доданих адміністратором, — для BIS
+    # (на Render один процес, тож оновлення словника безпечне)
+    sources.ISO2.update({c.code: c.iso2 for c in active if c.iso2})
     run = ImportRun(
         connector_id=connector.id,
         trigger=trigger,
         status=RunStatus.RUNNING,
-        request_url=sources.BASE_URLS[spec.source],
+        request_url=result.request_url if result else sources.BASE_URLS[spec.source],
     )
     db.add(run)
     db.commit()  # запуск видно одразу, навіть якщо далі буде помилка
 
     try:
-        result = fetch_with_retries(lambda: sources.fetch(spec, countries, today.year - 1, get), sleep)
+        if result is None:
+            result = fetch_with_retries(lambda: sources.fetch(spec, countries, today.year - 1, get), sleep)
     except Exception as exc:  # noqa: BLE001
         run.status, run.finished_at, run.error_message = RunStatus.FAILED, datetime.now(UTC), str(exc)[:1000]
         audit.append(
@@ -222,8 +232,12 @@ def run_all(
 ) -> list[dict]:
     out = []
     connectors = db.scalars(select(Connector).where(Connector.is_enabled).order_by(Connector.name)).all()
+    day = kw.get("today") or date.today()
     for c in connectors:
         if only and c.name.split()[-1] not in only:
+            continue
+        # S-37: щоденний запуск за розкладом — лише конектори, чий cron припадає на сьогодні (UC-20)
+        if trigger == RunTrigger.SCHEDULE and not schedule.due_on(c.schedule, day):
             continue
         run = run_connector(db, c, trigger, request_id, **kw)
         out.append(

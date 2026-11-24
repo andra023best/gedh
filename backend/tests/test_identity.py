@@ -390,7 +390,10 @@ def test_delete_account(client):
 
 
 def test_reference_lists_are_public(client):
-    assert len(client.get("/api/countries").json()) == 25
+    from app.seed.reference_data import COUNTRIES
+
+    # 25 країн платформи; адміністратор може додавати нові (UC-20 AC2) — перевіряємо входження
+    assert {c[0] for c in COUNTRIES} <= {c["code"] for c in client.get("/api/countries").json()}
     assert {c["code"] for c in client.get("/api/categories").json()} >= {"PRICES", "TRADE"}
     assert all(o["name"] for o in client.get("/api/organizations").json())
     assert "email_domain" not in (client.get("/api/organizations").json() or [{}])[0]

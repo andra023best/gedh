@@ -59,7 +59,16 @@ def set_demo_passwords(s: Session, users: list[User]) -> None:
 
 def seed_reference(s: Session) -> None:
     for code, ua, en in reference_data.COUNTRIES:
-        s.merge(Country(code=code, name_ua=ua, name_en=en, is_active=True))
+        s.merge(
+            Country(
+                code=code,
+                name_ua=ua,
+                name_en=en,
+                is_active=True,
+                iso2=reference_data.ISO2.get(code),
+                iso_numeric=reference_data.ISO_NUMERIC.get(code),
+            )
+        )
     for row in reference_data.OPEN_INDICATORS:
         code, ua, en, definition, unit, scale, freq, hmin, hmax, tmin, tmax, _ = row
         s.merge(

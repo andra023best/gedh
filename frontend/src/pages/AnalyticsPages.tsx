@@ -11,7 +11,7 @@ import { errorText } from '../lib/messages';
 import { api } from '../lib/session';
 
 type Coverage = { country: string; indicators: number; codes: string[] }[];
-type Named = { code: string; name_ua: string };
+type Named = { code: string; name_ua: string; iso_numeric?: string | null };
 type IndicatorMeta = {
   code: string;
   name_ua: string;
@@ -70,17 +70,21 @@ const useCatalog = () => useQuery({ queryKey: ['catalog'], queryFn: () => api<Ca
 
 // ------------------------------------------------------------------------------------------------ карта (UC-04)
 export function CoverageMap() {
-  const { user } = useAuth();
   const navigate = useNavigate();
   const coverage = useQuery({ queryKey: ['coverage'], queryFn: () => api<Coverage>('/coverage') });
   const countries = useCountries();
-  const indicators = useIndicators();
   const [picked, setPicked] = useState<{ code: string | null; name: string } | null>(null);
 
   const map = useMemo(() => {
-    const names = Object.fromEntries((countries.data ?? []).map((c) => [c.code, c.name_ua]));
+    const byCode = Object.fromEntries((countries.data ?? []).map((c) => [c.code, c]));
     const out: Record<string, MapCountry> = {};
-    for (const c of coverage.data ?? []) out[c.country] = { code: c.country, name: names[c.country] ?? c.country, indicators: c.indicators };
+    for (const c of coverage.data ?? [])
+      out[c.country] = {
+        code: c.country,
+        name: byCode[c.country]?.name_ua ?? c.country,
+        indicators: c.indicators,
+        numeric: byCode[c.country]?.iso_numeric,
+      };
     return out;
   }, [coverage.data, countries.data]);
 
@@ -88,38 +92,18 @@ export function CoverageMap() {
   if (!coverage.data || !countries.data) return <p className="hint">Завантаження карти…</p>;
 
   function select(code: string | null, name: string) {
-    if (code && user) return navigate(`/countries/${code}`); // UC-04 крок 5: до профілю країни
-    setPicked({ code, name });
+    if (code) return navigate(`/countries/${code}`); // UC-04 крок 5: до профілю країни
+    setPicked({ code, name }); // сіра країна — повідомлення (EX1)
   }
-  const codes = picked?.code ? (coverage.data.find((c) => c.country === picked.code)?.codes ?? []) : [];
-  const indName = Object.fromEntries((indicators.data ?? []).map((i) => [i.code, i]));
 
   return (
     <div>
       <WorldMap countries={map} onSelect={select} selected={picked?.code} />
       <p className="hint">
-        Зелені — {Object.keys(map).length} країн з відкритими даними World Bank, IMF і BIS. Натисніть на країну
-        {user ? ', щоб відкрити її профіль.' : ', щоб побачити, які показники доступні.'}
+        Зелені — {Object.keys(map).length} країн з відкритими даними World Bank, IMF і BIS. Натисніть на
+        країну, щоб відкрити її профіль.
       </p>
       {picked && !picked.code && <p className="warn">Для країни «{picked.name}» даних на платформі немає.</p>}
-      {picked?.code && !user && (
-        <div className="card">
-          <h2>{picked.name}</h2>
-          <p>Доступні показники (значення — після входу):</p>
-          <ul>
-            {codes.map((c) => (
-              <li key={c}>
-                <Link to={`/indicators/${c}`}>{indName[c]?.name_ua ?? c}</Link>
-                {indName[c] && <span className="hint"> — {indName[c].unit}, {FREQ_UK[indName[c].frequency] ?? indName[c].frequency}</span>}
-              </li>
-            ))}
-          </ul>
-          <p>
-            <Link to="/register">Зареєструйтеся</Link> або <Link to="/login">увійдіть</Link>, щоб бачити значення, графіки й
-            порівнювати країни.
-          </p>
-        </div>
-      )}
     </div>
   );
 }

@@ -7,6 +7,7 @@ from fastapi import APIRouter, FastAPI, Request
 from app import __version__
 from app.api import (
     admin,
+    admin_config,
     analytics,
     audit,
     auth,
@@ -39,6 +40,7 @@ def create_app() -> FastAPI:
     api.include_router(auth.router)
     api.include_router(me.router)
     api.include_router(admin.router)
+    api.include_router(admin_config.router)
     api.include_router(reference.router)
     api.include_router(data.router)
     api.include_router(analytics.router)

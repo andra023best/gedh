@@ -1,5 +1,6 @@
 """Довідники GEDH (концепція §4, табл. 3.31 звіту). Ці дані потрібні завжди, не лише для демо."""
 
+from app.ingestion import sources as _sources
 from app.models.enums import Frequency, QualityDimension, Severity
 
 # 25 демо-країн («зелені» на карті), ISO 3166-1 alpha-3 — концепція §4.2
@@ -299,3 +300,13 @@ QUALITY_RULES = [
 ]
 
 SOURCE_NAMES = {"WB": "World Bank", "IMF": "IMF", "BIS": "BIS"}
+
+
+# S-37: коди для BIS (alpha-2) і для карти (числовий ISO 3166-1, контури Natural Earth)
+ISO2 = dict(_sources.ISO2)
+ISO_NUMERIC = {
+    "ARG": "032", "AUS": "036", "BRA": "076", "CAN": "124", "CHE": "756", "CHN": "156", "DEU": "276",
+    "EGY": "818", "ESP": "724", "FRA": "250", "GBR": "826", "IDN": "360", "IND": "356", "ITA": "380",
+    "JPN": "392", "KOR": "410", "MEX": "484", "NLD": "528", "POL": "616", "SAU": "682", "SWE": "752",
+    "TUR": "792", "UKR": "804", "USA": "840", "ZAF": "710",
+}  # fmt: skip

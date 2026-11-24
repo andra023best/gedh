@@ -2,12 +2,14 @@
 
 import hashlib
 import json
+import secrets
+import uuid
 from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.api import serializers
@@ -20,7 +22,7 @@ from app.models.audit import AuditEvent
 from app.models.datasets import RestrictedDataset
 from app.models.enums import AccountStatus, AuditAction, ConsentAction, GrantStatus, Role
 from app.models.exchange import AccessGrant, AccessRequest, DataExport
-from app.models.identity import ConsentRecord, RegistrationRequest, User
+from app.models.identity import ApiKey, ConsentRecord, RegistrationRequest, User
 from app.models.identity import Session as UserSession
 from app.models.technical import Notification
 
@@ -148,6 +150,9 @@ def delete_me(
         update(UserSession)
         .where(UserSession.user_id == user.id, UserSession.revoked_at.is_(None))
         .values(revoked_at=now)
+    )
+    db.execute(  # API-ключі теж перестають діяти (FR-12)
+        update(ApiKey).where(ApiKey.user_id == user.id, ApiKey.revoked_at.is_(None)).values(revoked_at=now)
     )
     user.status = AccountStatus.DEACTIVATED
     user.deactivated_at = now
@@ -320,3 +325,78 @@ def export_personal_data(
             "X-Content-SHA256": sha,
         },
     )
+
+
+# ---------------------------------------------------------------------------- API-ключі (FR-12, FR-37)
+MAX_ACTIVE_KEYS = 3
+
+
+def key_out(k: ApiKey) -> dict:
+    return {
+        "id": str(k.id),
+        "prefix": k.prefix,
+        "created_at": serializers.iso(k.created_at),
+        "last_used_at": serializers.iso(k.last_used_at),
+        "revoked_at": serializers.iso(k.revoked_at),
+    }
+
+
+@router.get("/api-keys")
+def list_api_keys(user: User = Depends(current_user), db: Session = Depends(get_db)) -> list[dict]:
+    rows = db.scalars(select(ApiKey).where(ApiKey.user_id == user.id).order_by(ApiKey.created_at.desc()))
+    return [key_out(k) for k in rows]
+
+
+@router.post("/api-keys", status_code=201)
+def create_api_key(
+    request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)
+) -> dict:
+    """FR-12 (аналітик — читання даних), FR-37 (постачальник — ще й завантаження наборів).
+
+    Повний ключ показується **один раз**; у БД — лише префікс і SHA-256 (NFR-15, NFR-20). До 3 чинних ключів.
+    Ключ діє від імені власника з його роллю й дозволами, але лише на маршрутах читання даних і завантаження.
+    """
+    active = db.scalar(select(func.count()).where(ApiKey.user_id == user.id, ApiKey.revoked_at.is_(None)))
+    if active >= MAX_ACTIVE_KEYS:
+        raise ApiError(409, "API_KEY_LIMIT", limit=MAX_ACTIVE_KEYS)
+    prefix = f"gedh_{secrets.token_hex(4)}"
+    key = f"{prefix}_{secrets.token_urlsafe(32)}"
+    row = ApiKey(user_id=user.id, prefix=prefix, key_hash=security.token_hash(key))
+    db.add(row)
+    audit.append(
+        db,
+        action=AuditAction.CONFIG_CHANGE,
+        object_type="api_key",
+        object_id=prefix,
+        request_id=request_id(request),
+        actor_id=user.id,
+        actor_role=user.role,
+        on_behalf_of_id=user.organization_id,
+        details={"change": "API_KEY_CREATED", "prefix": prefix},
+    )
+    db.commit()
+    return {**key_out(row), "key": key}
+
+
+@router.post("/api-keys/{key_id}/revoke")
+def revoke_api_key(
+    key_id: uuid.UUID, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)
+) -> dict:
+    k = db.get(ApiKey, key_id)
+    if k is None or k.user_id != user.id:
+        raise ApiError(404, "NOT_FOUND")
+    if k.revoked_at is None:
+        k.revoked_at = datetime.now(UTC)
+        audit.append(
+            db,
+            action=AuditAction.CONFIG_CHANGE,
+            object_type="api_key",
+            object_id=k.prefix,
+            request_id=request_id(request),
+            actor_id=user.id,
+            actor_role=user.role,
+            on_behalf_of_id=user.organization_id,
+            details={"change": "API_KEY_REVOKED", "prefix": k.prefix},
+        )
+        db.commit()
+    return key_out(k)

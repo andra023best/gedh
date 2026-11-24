@@ -10,7 +10,7 @@ type Shape = { id: string; d: string };
 const W = 960;
 const H = 470;
 
-export type MapCountry = { code: string; name: string; indicators: number };
+export type MapCountry = { code: string; name: string; indicators: number; numeric?: string | null };
 
 export default function WorldMap({
   countries,
@@ -48,7 +48,12 @@ export default function WorldMap({
     };
   }, []);
 
-  const byNum = useMemo(() => NUM_TO_ISO3, []);
+  // числовий код контуру → ISO3: з довідника країн (нові країни, UC-20 AC2), інакше — вбудована таблиця
+  const byNum = useMemo(() => {
+    const out: Record<string, string> = { ...NUM_TO_ISO3 };
+    for (const c of Object.values(countries)) if (c.numeric) out[c.numeric] = c.code;
+    return out;
+  }, [countries]);
 
   function info(s: Shape & { name: string }) {
     const iso3 = byNum[s.id] ?? null;

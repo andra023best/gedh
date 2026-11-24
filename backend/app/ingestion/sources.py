@@ -162,3 +162,51 @@ def fetch(
     spec: Spec, countries: list[str], last_year: int, get: Callable[[str], bytes] = http_get
 ) -> FetchResult:
     return FETCHERS[spec.source](spec, countries, last_year, get)
+
+
+def parse_official_csv(
+    spec: Spec, raw: bytes, countries: list[str], last_year: int, filename: str = "upload.csv"
+) -> FetchResult:
+    """UC-20 AC4: резервний імпорт, якщо API джерела тривалий час недоступний.
+
+    Приймає два формати:
+    1. **офіційний CSV-експорт World Bank** («API_<ряд>_DS2_…csv»): службові рядки зверху,
+       далі заголовок `Country Name, Country Code, Indicator Name, Indicator Code, 1960, …`;
+       береться рядок нашого ряду;
+    2. **довгий формат** `country,year,value` (ISO3, рік, значення в одиницях джерела) — для експортів
+       IMF і BIS, збережених у CSV.
+    Далі — та сама гармонізація (масштаб показника), що й для API, і ті самі перевірки якості.
+    """
+    text = raw.decode("utf-8-sig")
+    lines = list(csv.reader(io.StringIO(text)))
+    rows: list[Row] = []
+
+    def add(iso3: str, year: int, value: float, note: str | None = None) -> None:
+        if iso3 in countries and FIRST_YEAR <= year <= last_year:
+            start, end = year_period(year)
+            rows.append(Row(iso3, spec.indicator, start, end, round(value * spec.scale, 4), note=note))
+
+    header_at = next((i for i, r in enumerate(lines) if "Country Code" in r and "Indicator Code" in r), None)
+    if header_at is not None:
+        header = lines[header_at]
+        ci, ii = header.index("Country Code"), header.index("Indicator Code")
+        years = [(j, int(h)) for j, h in enumerate(header) if h.strip().isdigit()]
+        found = False
+        for r in lines[header_at + 1 :]:
+            if len(r) <= ii or r[ii] != spec.series:
+                continue
+            found = True
+            for j, year in years:
+                if j < len(r) and r[j].strip() not in ("", ".."):
+                    add(r[ci], year, float(r[j]))
+        if not found:
+            raise ValueError(f"У файлі немає ряду {spec.series} — це експорт іншого показника")
+    else:
+        head = [h.strip().lower() for h in (lines[0] if lines else [])]
+        if not {"country", "year", "value"} <= set(head):
+            raise ValueError("Невідомий формат: потрібен експорт World Bank або колонки country,year,value")
+        c, y, v = head.index("country"), head.index("year"), head.index("value")
+        for r in lines[1:]:
+            if len(r) > max(c, y, v) and r[y].strip().isdigit() and r[v].strip() not in ("", "NaN", ".."):
+                add(r[c].strip().upper(), int(r[y]), float(r[v]))
+    return FetchResult(f"file:{filename}", raw, rows)

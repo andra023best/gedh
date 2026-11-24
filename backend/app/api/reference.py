@@ -26,7 +26,14 @@ def verified_organizations(db: Session = Depends(get_db)) -> list[dict]:
 @router.get("/countries")
 def countries(db: Session = Depends(get_db)) -> list[dict]:
     return [
-        {"code": c.code, "name_ua": c.name_ua, "name_en": c.name_en, "is_active": c.is_active}
+        {
+            "code": c.code,
+            "name_ua": c.name_ua,
+            "name_en": c.name_en,
+            "is_active": c.is_active,
+            "iso2": c.iso2,
+            "iso_numeric": c.iso_numeric,  # S-37: контур на карті
+        }
         for c in db.scalars(select(Country).order_by(Country.name_ua))
     ]
 

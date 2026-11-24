@@ -39,9 +39,11 @@ def unemp():
     return u1, u2
 
 
-def test_coverage_lists_indicators_for_guest(unemp):
-    """UC-04 кроки 2–3, 5 (FR-06, FR-07): гість бачить, які показники є в країні, без значень."""
-    cov = TestClient(app).get("/api/coverage").json()
+def test_coverage_requires_login_and_lists_indicators(unemp):
+    """UC-04 кроки 2–3 (FR-06): кількість і коди показників без значень; S-36 — лише після входу."""
+    c = TestClient(app)
+    assert c.get("/api/coverage").status_code == 401
+    cov = c.get("/api/coverage", headers=auth(login(c, make_user().email))).json()
     ukr = next(c for c in cov if c["country"] == "UKR")
     assert "UNEMP" in ukr["codes"] and ukr["indicators"] == len(ukr["codes"])
     assert "value" not in json.dumps(cov)
@@ -83,9 +85,11 @@ def test_country_profile(unemp):
     assert any(x["object_type"] == "country" for x in items)
 
 
-def test_indicator_card_is_public_and_has_no_values(unemp):
-    """FR-09 (UC-04 AC1): метадані, джерело, класифікація, покриття країн — без значень."""
+def test_indicator_card_has_no_values(unemp):
+    """FR-09: метадані, джерело, класифікація, покриття країн — без значень; S-36 — лише після входу."""
     c = TestClient(app)
+    assert c.get("/api/indicators/unemp").status_code == 401
+    c.headers.update(auth(login(c, make_user().email)))
     card = c.get("/api/indicators/unemp").json()
     assert card["code"] == "UNEMP" and card["classification"] == "OPEN" and card["source"] == "WB"
     assert card["definition"] and card["unit"] and card["frequency"] == "ANNUAL" and card["licence"]

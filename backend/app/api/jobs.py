@@ -43,17 +43,23 @@ def check_job_token(request: Request) -> None:
         raise ApiError(401, "JOB_TOKEN_INVALID")
 
 
-def _import_job(rid: str, only: set[str] | None) -> None:
+def _import_job(rid: str, only: set[str] | None, scheduled: bool = False) -> None:
     with new_session() as db:
-        run_all(db, RunTrigger.SCHEDULE, request_id=rid, only=only)
+        run_all(db, RunTrigger.SCHEDULE if scheduled else RunTrigger.MANUAL, request_id=rid, only=only)
 
 
 @router.post("/import", status_code=202)
-def import_open_data(request: Request, background: BackgroundTasks, indicator: str | None = None) -> dict:
-    """UC-14: запуск усіх увімкнених конекторів (або одного показника)."""
+def import_open_data(
+    request: Request, background: BackgroundTasks, indicator: str | None = None, scheduled: bool = False
+) -> dict:
+    """UC-14: запуск увімкнених конекторів (або одного показника).
+
+    `scheduled=true` — щоденний виклик планувальника: запускаються лише конектори, чий розклад (cron) припадає
+    на сьогодні (S-37). Без нього — ручний запуск усіх увімкнених.
+    """
     check_job_token(request)
     rid = request_id(request) or f"job-{uuid.uuid4()}"
-    background.add_task(_import_job, rid, {indicator} if indicator else None)
+    background.add_task(_import_job, rid, {indicator} if indicator else None, scheduled)
     return {"message": "Імпорт запущено", "request_id": rid}
 
 

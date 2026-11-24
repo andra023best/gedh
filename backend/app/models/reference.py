@@ -14,6 +14,9 @@ class Country(Base):
     name_ua: Mapped[str] = mapped_column(String(100))
     name_en: Mapped[str] = mapped_column(String(100))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # S-37: коди для конекторів і карти (UC-20 AC2: нова країна стає «зеленою» після імпорту)
+    iso2: Mapped[str | None] = mapped_column(String(2))  # BIS використовує alpha-2
+    iso_numeric: Mapped[str | None] = mapped_column(String(3))  # контури карти (Natural Earth)
 
 
 class Indicator(Base):

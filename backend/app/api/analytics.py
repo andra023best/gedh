@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.api.data import source_info, summary
 from app.api.serializers import iso
 from app.core import audit
-from app.core.deps import current_user, get_db, request_id
+from app.core.deps import api_user, get_db, request_id
 from app.core.errors import ApiError
 from app.models.datasets import Dataset, DatasetVersion, Observation, OpenDataset, RestrictedDataset
 from app.models.enums import AuditAction, VersionStatus
@@ -53,7 +53,7 @@ def period_label(start, frequency: str) -> str:
 
 @router.get("/countries/{code}/profile")
 def country_profile(
-    code: str, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)
+    code: str, request: Request, user: User = Depends(api_user), db: Session = Depends(get_db)
 ) -> dict:
     """UC-05 (FR-08): для кожного відкритого показника — ряд, останнє значення, зміна до попереднього
     періоду, джерело, дата оновлення й версія; перелік закритих наборів країни без значень (AC2).
@@ -135,8 +135,8 @@ def country_profile(
 
 
 @router.get("/indicators/{code}")
-def indicator_card(code: str, db: Session = Depends(get_db)) -> dict:
-    """FR-09 (DG-13): метадані показника без значень — доступні й гостю (UC-04 AC1).
+def indicator_card(code: str, _: User = Depends(api_user), db: Session = Depends(get_db)) -> dict:
+    """FR-09 (DG-13): метадані показника без значень; з S-36 — лише після входу.
 
     Код, назва, визначення, одиниця, частота, джерело, класифікація, набори, де він є, і покриття країн.
     """

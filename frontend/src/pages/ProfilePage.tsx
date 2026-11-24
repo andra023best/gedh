@@ -131,6 +131,8 @@ export default function ProfilePage() {
         </tbody>
       </table>
 
+      <ApiKeys role={me.data?.role} />
+
       <h2>Мої дані у файлі</h2>
       <p>
         Копія всіх ваших персональних даних, заявок, дозволів та історії входів у форматі JSON (UC-21, право
@@ -194,5 +196,85 @@ export default function ProfilePage() {
         </form>
       )}
     </section>
+  );
+}
+
+type ApiKeyRow = { id: string; prefix: string; created_at: string; last_used_at: string | null; revoked_at: string | null };
+
+// FR-12 (читання даних через REST API), FR-37 (постачальник — ще й завантаження наборів). Повний ключ показується один раз.
+function ApiKeys({ role }: { role?: string }) {
+  const qc = useQueryClient();
+  const keys = useQuery({ queryKey: ['api-keys'], queryFn: () => api<ApiKeyRow[]>('/me/api-keys') });
+  const [fresh, setFresh] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const refresh = () => void qc.invalidateQueries({ queryKey: ['api-keys'] });
+  const when = (s: string | null) => (s ? new Date(s).toLocaleString('uk-UA') : '—');
+
+  async function create() {
+    setError(null);
+    try {
+      setFresh((await post<{ key: string }>('/me/api-keys')).key);
+      refresh();
+    } catch (err) {
+      setError(errorText(err));
+    }
+  }
+
+  const base = `${window.location.origin}/api`;
+  return (
+    <>
+      <h2>API-ключі</h2>
+      <p>
+        Ключ дає доступ до даних з ваших програм (Python, R, Excel Power Query) — з тими самими правами, що й ваш обліковий
+        запис, але лише для читання даних{role === 'DATA_PROVIDER' ? ' і завантаження наборів' : ''}. До 3 чинних ключів;
+        60 запитів за хвилину на ключ. Кожен запит записується в журнал аудиту.
+      </p>
+      {error && <p className="error">{error}</p>}
+      {fresh && (
+        <div className="card">
+          <p className="warn">Скопіюйте ключ зараз — більше його не буде видно (зберігається лише хеш):</p>
+          <code className="hash">{fresh}</code>
+          <pre>{`curl -H "X-API-Key: ${fresh}" ${base}/datasets/<id набору>/observations?countries=UKR,POL`}</pre>
+          {role === 'DATA_PROVIDER' && (
+            <pre>{`curl -H "X-API-Key: ${fresh}" -F file=@data.csv -F category_code=PRICES \\\n  -F source_document_title=… -F source_methodology=… \
+  -F source_responsible_person=… -F source_url=… ${base}/provider/uploads`}</pre>
+          )}
+          <button onClick={() => setFresh(null)}>Я зберіг ключ</button>
+        </div>
+      )}
+      <p>
+        <button onClick={() => void create()}>Створити ключ</button>
+      </p>
+      {keys.data && keys.data.length > 0 && (
+        <table>
+          <thead>
+            <tr>
+              <th>Ключ</th>
+              <th>Створено</th>
+              <th>Останнє використання</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {keys.data.map((k) => (
+              <tr key={k.id} className={k.revoked_at ? 'denied' : undefined}>
+                <td>
+                  <code>{k.prefix}_…</code>
+                </td>
+                <td>{when(k.created_at)}</td>
+                <td>{when(k.last_used_at)}</td>
+                <td>
+                  {k.revoked_at ? (
+                    `відкликано ${when(k.revoked_at)}`
+                  ) : (
+                    <button onClick={() => void post(`/me/api-keys/${k.id}/revoke`).then(refresh)}>Відкликати</button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
   );
 }

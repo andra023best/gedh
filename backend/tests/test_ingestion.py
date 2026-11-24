@@ -182,16 +182,16 @@ def test_critical_quality_blocks_new_version():
 
 @pytestmark_db
 def test_open_data_view_requires_login_and_restricted_is_denied():
+    from tests.test_identity import auth, login, make_user
+
     client = TestClient(app)
-    catalog = client.get("/api/catalog/datasets").json()
+    assert client.get("/api/catalog/datasets").status_code == 401  # S-36: каталог — після входу
+    s = auth(login(client, make_user().email))
+    catalog = client.get("/api/catalog/datasets", headers=s).json()
     assert {d["kind"] for d in catalog} == {"OPEN", "RESTRICTED"}
     assert all(d["is_synthetic"] for d in catalog if d["kind"] == "RESTRICTED")  # FR-27
     unemp = str(sid("open", "UNEMP"))
     assert client.get(f"/api/datasets/{unemp}/observations").status_code == 401  # гість — без значень (L0)
-
-    from tests.test_identity import auth, login, make_user
-
-    s = auth(login(client, make_user().email))
     r = client.get(f"/api/datasets/{unemp}/observations?countries=UKR,POL", headers=s)
     assert r.status_code == 200 and r.json()["source"]["document_title"].startswith("World Bank")
     assert {i["country"] for i in r.json()["items"]} <= {"UKR", "POL"}
@@ -206,7 +206,7 @@ def test_job_endpoint_requires_token(monkeypatch):
     client = TestClient(app)
     assert client.post("/api/internal/jobs/import").json()["detail"] == "JOB_TOKEN_INVALID"
     monkeypatch.setattr(get_settings(), "job_token", "t0ken")
-    monkeypatch.setattr("app.api.jobs._import_job", lambda rid, only: None)
+    monkeypatch.setattr("app.api.jobs._import_job", lambda rid, only, scheduled=False: None)
     r = client.post("/api/internal/jobs/import?indicator=UNEMP", headers={"X-Job-Token": "t0ken"})
     assert r.status_code == 202
 
@@ -219,6 +219,9 @@ def test_coverage_counts_indicators():
             .join(DatasetVersion)
             .where(DatasetVersion.status == VersionStatus.PUBLISHED)
         )
-    cov = TestClient(app).get("/api/coverage").json()
+    from tests.test_identity import auth, login, make_user
+
+    c = TestClient(app)
+    cov = c.get("/api/coverage", headers=auth(login(c, make_user().email))).json()
     assert has_data and any(c["country"] == "UKR" for c in cov)
     assert ImportRun  # використано в інших тестах

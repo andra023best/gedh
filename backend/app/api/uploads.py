@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.api import exchange
 from app.api.serializers import iso
 from app.core import audit, notifier
-from app.core.deps import current_user, get_db, request_id, require
+from app.core.deps import api_user, get_db, request_id, require, require_api
 from app.core.errors import ApiError
 from app.ingestion import quality, upload
 from app.ingestion.service import indicator_rules, snapshot
@@ -40,6 +40,7 @@ from app.models.technical import StoredFile
 router = APIRouter(tags=["uploads"])
 provider_only = require(Role.DATA_PROVIDER)
 dg_only = require(Role.DG_OFFICER)
+provider_api = require_api(Role.DATA_PROVIDER)  # FR-37: завантаження й через API-ключ постачальника
 
 DATASET_MAX = 5 * 1024 * 1024  # NFR-19
 REJECTED_FILE_KEEP = timedelta(days=30)  # табл. 3.26: відхилені файли карантину — 30 днів
@@ -203,7 +204,7 @@ async def upload_dataset(
     dataset_id: Annotated[uuid.UUID | None, Form()] = None,
     title_ua: Annotated[str | None, Form(max_length=300)] = None,
     title_en: Annotated[str | None, Form(max_length=300)] = None,
-    user: User = Depends(provider_only),
+    user: User = Depends(provider_api),
     db: Session = Depends(get_db),
 ) -> dict:
     rid = request_id(request)
@@ -391,7 +392,7 @@ async def upload_dataset(
 
 @router.get("/dataset-versions/{version_id}")
 def get_dataset_version(
-    version_id: uuid.UUID, user: User = Depends(current_user), db: Session = Depends(get_db)
+    version_id: uuid.UUID, user: User = Depends(api_user), db: Session = Depends(get_db)
 ) -> dict:
     v = get_version(db, version_id)
     d = db.get(RestrictedDataset, v.dataset_id)
