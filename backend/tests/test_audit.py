@@ -107,29 +107,39 @@ def test_list_filters_pagination_and_view_is_logged(c, dg):
 
 
 def test_filter_by_dataset_and_country(c, dg):
-    """UC-15 крок 2: набір і країна — через об'єкт події (набір, версія, дозвіл, заявка, організація)."""
+    """UC-15 крок 2: набір і країна — через об'єкт події (набір, версія, дозвіл, заявка, організація).
+
+    Лише демо-набір із seed: на чистій БД (CI) відкриті набори ще не мають версій до тесту імпорту.
+    """
     _, h = dg
     analyst = make_user(Role.ANALYST)
-    ah = auth(login(c, analyst.email))
-    unemp, prices = str(sid("open", "UNEMP")), str(sid("dataset", "ukr_prices"))
-    assert c.get(f"/api/datasets/{unemp}/observations", headers=ah).status_code == 200
-    assert c.get(f"/api/datasets/{prices}/observations", headers=ah).status_code == 403  # UC-16 EX2
+    org = sid("org", "stat_ukr")
+    provider = make_user(Role.DATA_PROVIDER, org_id=org)
+    prices = str(sid("dataset", "ukr_prices"))
+    # аналітик — відмова (UC-16 EX2); постачальник-власник — успіх
+    assert (
+        c.get(f"/api/datasets/{prices}/observations", headers=auth(login(c, analyst.email))).status_code
+        == 403
+    )
+    assert (
+        c.get(f"/api/datasets/{prices}/observations", headers=auth(login(c, provider.email))).status_code
+        == 200
+    )
 
-    by_ds = c.get("/api/audit/events", headers=h, params={"dataset_id": unemp, "limit": 200}).json()["items"]
-    assert any(e["action"] == "DATA_VIEW" and e["actor_id"] == str(analyst.id) for e in by_ds)
+    by_ds = c.get("/api/audit/events", headers=h, params={"dataset_id": prices, "limit": 200}).json()["items"]
+    mine = {(e["actor_id"], e["result"]) for e in by_ds if e["action"] == "DATA_VIEW"}
+    assert {(str(analyst.id), "DENIED"), (str(provider.id), "SUCCESS")} <= mine
     assert all(e["object_type"] in ("dataset", "dataset_version", "grant", "import_run") for e in by_ds)
-    assert not any(e["object_id"] == prices for e in by_ds)
+    other = str(sid("dataset", "pol_trade"))
+    assert not any(e["object_id"] == other for e in by_ds)
 
-    # закритий набір України: відмову аналітику видно за країною, але не за іншою країною
+    # закритий набір України: відмову видно за країною набору, але не за іншою країною
     ukr = c.get("/api/audit/events", headers=h, params={"country": "UKR", "result": "DENIED", "limit": 200})
     assert any(e["actor_id"] == str(analyst.id) and e["object_id"] == prices for e in ukr.json()["items"])
     pol = c.get("/api/audit/events", headers=h, params={"country": "POL", "limit": 200}).json()["items"]
     assert not any(e["object_id"] == prices for e in pol)
 
     # фільтр за організацією, від імені якої діяли
-    org = sid("org", "stat_ukr")
-    provider = make_user(Role.DATA_PROVIDER, org_id=org)
-    c.get(f"/api/datasets/{unemp}/observations", headers=auth(login(c, provider.email)))
     items = c.get("/api/audit/events", headers=h, params={"organization_id": str(org)}).json()["items"]
     assert items and all(e["on_behalf_of_id"] == str(org) for e in items)
     assert items[0]["organization_label"]
