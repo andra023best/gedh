@@ -75,7 +75,10 @@ def new_request(s: Session) -> AccessRequest:
 
 
 def test_seed_loaded(s):
-    assert s.scalar(select(text("count(*)")).select_from(text("countries"))) == 25
+    from app.seed.reference_data import COUNTRIES
+
+    codes = set(s.scalars(select(text("code")).select_from(text("countries"))))
+    assert {c[0] for c in COUNTRIES} <= codes  # 25 країн платформи (адміністратор може додавати нові)
     assert s.get(RestrictedDataset, UKR_PRICES).is_synthetic
 
 

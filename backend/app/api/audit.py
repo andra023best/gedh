@@ -39,6 +39,7 @@ EXPORT_MAX = 10_000
 def dg_officer(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)) -> User:
     """UC-15 EX1: інші ролі — 403, спроба потрапляє в той самий журнал."""
     if user.role != Role.DG_OFFICER:
+        request.state.denial_audited = True
         audit.append(
             db,
             action=AuditAction.AUDIT_VIEW,

@@ -190,6 +190,7 @@ def load_for_user(
             details={"reason": decision.reason},
         )
         db.commit()
+        request.state.denial_audited = True
         raise ApiError(403, decision.reason)
     if version:
         v = db.scalars(
@@ -467,6 +468,7 @@ def lineage(
                 details={"view": "lineage", "reason": decision.reason},
             )
             db.commit()
+            request.state.denial_audited = True
             raise ApiError(403, decision.reason)
     sees_all = user.role == Role.DG_OFFICER or (restricted and user.organization_id == d.owner_org_id)
 

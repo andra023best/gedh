@@ -100,6 +100,7 @@ def require_api(*roles: Role) -> Callable[..., User]:
 
 def _check_role(request: Request, user: User, db: Session, roles: tuple[Role, ...]) -> User:
     if user.role not in roles:
+        request.state.denial_audited = True  # записано тут, обробник помилок не дублює
         audit.append(
             db,
             action=AuditAction.SECURITY_INCIDENT,

@@ -270,3 +270,26 @@ def test_retention_anonymizes_after_30_days_and_purges_files(c):
     r = c.post("/api/auth/login", json={"email": gone.email, "password": PASSWORD})
     assert r.status_code == 401
     assert apply_retention("test-retention-2", now)["accounts_anonymized"] == 0  # ідемпотентно
+
+
+def test_every_denial_is_audited_once(c):
+    """DG-06 (S-38): відмова «чужий об'єкт» усередині маршруту — у журналі; відмова за роллю — один запис."""
+    from app.models.datasets import DatasetVersion
+
+    with new_session() as db:
+        vid = db.scalar(
+            select(DatasetVersion.id).where(DatasetVersion.dataset_id == sid("dataset", "ukr_prices"))
+        )
+    pol = make_user(Role.DATA_PROVIDER, org_id=sid("org", "trade_pol"))
+    r = c.get(f"/api/dataset-versions/{vid}", headers=auth(login(c, pol.email)))
+    assert r.status_code == 403
+    e = events(actor_id=pol.id, action=AuditAction.SECURITY_INCIDENT)
+    assert len(e) == 1 and json.loads(e[0].details)["reason"] == "FORBIDDEN_ROLE"
+    assert e[0].object_id.startswith("GET /api/dataset-versions/")
+
+    analyst = make_user(Role.ANALYST)
+    assert c.get("/api/dg/review-queue", headers=auth(login(c, analyst.email))).status_code == 403
+    assert len(events(actor_id=analyst.id, action=AuditAction.SECURITY_INCIDENT)) == 1  # без дублю
+    assert c.get("/api/audit/events", headers=auth(login(c, analyst.email))).status_code == 403
+    assert len(events(actor_id=analyst.id, action=AuditAction.AUDIT_VIEW)) == 1
+    assert len(events(actor_id=analyst.id, action=AuditAction.SECURITY_INCIDENT)) == 1

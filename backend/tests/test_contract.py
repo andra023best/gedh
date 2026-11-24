@@ -82,3 +82,34 @@ def test_guest_operations_are_public(spec):
 
 def test_all_paths_under_api_prefix_servers(spec):
     assert all(s["url"].endswith("/api") for s in spec["servers"])
+
+
+def test_every_route_is_in_contract_and_back(spec):
+    """S-38: маршрути FastAPI ↔ docs/openapi.yaml в обидва боки (шлях і метод), щоб контракт не відставав."""
+    import importlib
+    import pkgutil
+    import re
+
+    from fastapi.routing import APIRoute
+
+    import app.api as api_pkg
+
+    norm = lambda p: re.sub(r"\{[^}]+\}", "{}", p)  # noqa: E731
+    in_contract = {
+        (m.upper(), norm(path))
+        for path, item in spec["paths"].items()
+        for m in item
+        if m in ("get", "post", "put", "patch", "delete")
+    }
+    in_code = set()
+    for mod in pkgutil.iter_modules(api_pkg.__path__):
+        router = getattr(importlib.import_module(f"app.api.{mod.name}"), "router", None)
+        if router is None or mod.name == "diag":  # діагностика Е0 — поза контрактом, вимикається (T-02)
+            continue
+        for r in router.routes:
+            if isinstance(r, APIRoute):
+                in_code |= {
+                    (m, norm(r.path)) for m in r.methods if m in ("GET", "POST", "PUT", "PATCH", "DELETE")
+                }
+    assert not in_code - in_contract, f"немає в контракті: {sorted(in_code - in_contract)}"
+    assert not in_contract - in_code, f"немає в коді: {sorted(in_contract - in_code)}"
