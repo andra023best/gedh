@@ -100,3 +100,85 @@ export function RegistrationClarificationPage() {
     </section>
   );
 }
+
+// FR-35: запит посилання (однакова відповідь для будь-якого e-mail) і новий пароль за одноразовим посиланням (1 год).
+export function ForgotPasswordPage() {
+  const [email, setEmail] = useState('');
+  const [sent, setSent] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    try {
+      setSent((await post<{ message: string }>('/auth/password-reset/request', { email })).message);
+    } catch (err) {
+      setError(errorText(err));
+    }
+  }
+
+  return (
+    <section className="narrow">
+      <h1>Відновлення пароля</h1>
+      {sent ? (
+        <p className="ok">{sent} Посилання дійсне 1 годину.</p>
+      ) : (
+        <form onSubmit={submit} className="form">
+          <label>
+            E-mail облікового запису
+            <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
+          </label>
+          {error && <p className="error">{error}</p>}
+          <button type="submit">Надіслати посилання</button>
+        </form>
+      )}
+      <p>
+        <Link to="/login">Повернутися до входу</Link>
+      </p>
+    </section>
+  );
+}
+
+export function ResetPasswordPage() {
+  const [params] = useSearchParams();
+  const token = params.get('token') ?? '';
+  const [password, setPassword] = useState('');
+  const [repeat, setRepeat] = useState('');
+  const [state, setState] = useState<{ ok: boolean; text: string } | null>(null);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (password !== repeat) return setState({ ok: false, text: 'Паролі не збігаються.' });
+    try {
+      const r = await post<{ message: string }>('/auth/password-reset/confirm', { token, password });
+      setState({ ok: true, text: r.message });
+    } catch (err) {
+      setState({ ok: false, text: errorText(err) });
+    }
+  }
+
+  return (
+    <section className="narrow">
+      <h1>Новий пароль</h1>
+      {state?.ok ? (
+        <p className="ok">
+          {state.text} <Link to="/login">Увійти</Link>
+        </p>
+      ) : (
+        <form onSubmit={submit} className="form">
+          <label>
+            Новий пароль (щонайменше 10 символів, літери й цифри)
+            <input type="password" autoComplete="new-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
+          </label>
+          <label>
+            Повторіть пароль
+            <input type="password" autoComplete="new-password" required value={repeat} onChange={(e) => setRepeat(e.target.value)} />
+          </label>
+          {state && <p className="error">{state.text}</p>}
+          <button type="submit">Зберегти пароль</button>
+          <p className="hint">Після зміни пароля всі ваші сесії буде завершено — увійдіть знову.</p>
+        </form>
+      )}
+    </section>
+  );
+}

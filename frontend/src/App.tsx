@@ -1,5 +1,6 @@
 // Каркас застосунку: меню за роллю, маршрути, банер «сервер прокидається», вікно нової версії згоди.
 // Дизайн — окремим кроком (S-05); тут лише функціональні сторінки.
+import { useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { fetchWithWake, type WakeProgress } from './api';
@@ -12,11 +13,18 @@ import AuditPage from './pages/AuditPage';
 import { CatalogPage, OpenDataPage } from './pages/DataPages';
 import { DgReviewPage, ProviderPage } from './pages/DatasetPages';
 import { GrantsPage, RequestsPage } from './pages/ExchangePages';
+import LineagePage from './pages/LineagePage';
 import LoginPage from './pages/LoginPage';
+import NotificationsPage, { type Feed } from './pages/NotificationsPage';
 import ProfilePage from './pages/ProfilePage';
 import RegisterPage from './pages/RegisterPage';
 import SystemPage from './pages/SystemPage';
-import { RegistrationClarificationPage, VerifyEmailPage } from './pages/TokenPages';
+import {
+  ForgotPasswordPage,
+  RegistrationClarificationPage,
+  ResetPasswordPage,
+  VerifyEmailPage,
+} from './pages/TokenPages';
 
 function WakeBanner() {
   const [wake, setWake] = useState<WakeProgress | null>(null);
@@ -64,6 +72,17 @@ function ConsentModal() {
   );
 }
 
+// FR-29: лічильник непрочитаних сповіщень; оновлюється раз на хвилину, поки вкладка відкрита
+function NotificationsLink() {
+  const feed = useQuery({
+    queryKey: ['notifications'],
+    queryFn: () => api<Feed>('/notifications?limit=100'),
+    refetchInterval: 60_000,
+  });
+  const n = feed.data?.unread ?? 0;
+  return <NavLink to="/notifications">Сповіщення{n > 0 ? ` (${n})` : ''}</NavLink>;
+}
+
 function Nav() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -83,6 +102,7 @@ function Nav() {
         {user?.role === 'DG_OFFICER' && <NavLink to="/dg/review">Перевірка наборів</NavLink>}
         {user?.role === 'DG_OFFICER' && <NavLink to="/audit">Журнал аудиту</NavLink>}
         {user?.role === 'ADMIN' && <NavLink to="/admin/registrations">Заявки на реєстрацію</NavLink>}
+        {user && <NotificationsLink />}
         {user && <NavLink to="/profile">Профіль</NavLink>}
         <NavLink to="/system">Стан системи</NavLink>
       </nav>
@@ -150,6 +170,24 @@ export default function App() {
           <Route path="/register" element={<RegisterPage />} />
           <Route path="/verify-email" element={<VerifyEmailPage />} />
           <Route path="/registration-clarification" element={<RegistrationClarificationPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route
+            path="/notifications"
+            element={
+              <RequireAuth>
+                <NotificationsPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/datasets/:id/lineage"
+            element={
+              <RequireAuth>
+                <LineagePage />
+              </RequireAuth>
+            }
+          />
           <Route
             path="/profile"
             element={

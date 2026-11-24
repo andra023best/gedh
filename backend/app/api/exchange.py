@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.api.serializers import iso, org_public
 from app.core import agreement as dsa_text
-from app.core import audit, mail
+from app.core import audit, notifier
 from app.core.deps import current_user, get_db, request_id, require
 from app.core.errors import ApiError
 from app.models.datasets import DatasetVersion, RestrictedDataset
@@ -84,9 +84,13 @@ def published_target(db: Session, country: str, category: str) -> RestrictedData
     ).first()
 
 
-def notify(users, subject: str, text: str) -> None:
-    for u in users:
-        mail.send(mail.Mail(to=u.email, subject=subject, text=text))
+def notify(db: Session, users, subject: str, text: str, link: str | None = None, **kw) -> None:
+    """FR-29 + FR-39: сповіщення в інтерфейсі й лист (app/core/notifier.py)."""
+    notifier.notify(db, users, subject, text, link=link, **kw)
+
+
+def req_link(req: AccessRequest) -> str:
+    return f"/requests?id={req.id}"
 
 
 def admins(db: Session) -> list[User]:
@@ -270,7 +274,8 @@ def create_request(
         .where(
             User.organization_id == org.id,
             AccessGrant.deletion_confirmed_at.is_(None),
-            or_(AccessGrant.status == GrantStatus.EXPIRED, AccessGrant.valid_to <= now()),
+            # завершені й призупинені дозволи (UC-19 AC1: призупинення теж закінчує доступ)
+            or_(AccessGrant.status != GrantStatus.ACTIVE, AccessGrant.valid_to <= now()),
         )
     )
     if unconfirmed:
@@ -327,9 +332,11 @@ def create_request(
     )
     db.commit()
     notify(
+        db,
         admins(db),
         "GEDH: нова заявка на закриті дані",
         f"Заявка {req.number} ({req.country_code} × {req.category_code}) очікує першого погодження.",
+        req_link(req),
     )
     return request_out(db, req)
 
@@ -418,14 +425,22 @@ def admin_decision(
     db.commit()
     if req.status == S.PROVIDER_REVIEW:
         notify(
+            db,
             providers_of(db, req.country_code),
             "GEDH: заявка на ваші дані",
             f"Заявка {req.number} ({req.category_code}) погоджена адміністратором "
             "і чекає вашого рішення щодо обсягу.",
+            req_link(req),
         )
     else:
         verb = "відхилено" if req.status == S.REJECTED else "потребує уточнення"
-        notify([requester], f"GEDH: заявка {req.number} — {verb}", f"Коментар адміністратора: {reason}")
+        notify(
+            db,
+            [requester],
+            f"GEDH: заявка {req.number} — {verb}",
+            f"Коментар адміністратора: {reason}",
+            req_link(req),
+        )
     return request_out(db, req)
 
 
@@ -459,7 +474,13 @@ def answer_clarification(
         details={"step": "CLARIFICATION_ANSWERED"},
     )
     db.commit()
-    notify(admins(db), "GEDH: відповідь на уточнення", f"Заявка {req.number} повернулася на розгляд.")
+    notify(
+        db,
+        admins(db),
+        "GEDH: відповідь на уточнення",
+        f"Заявка {req.number} повернулася на розгляд.",
+        req_link(req),
+    )
     return request_out(db, req)
 
 
@@ -552,7 +573,7 @@ def provider_decision(
         "угоду буде надіслано після публікації.",
         S.AWAITING_AGREEMENT: "Заявку погоджено. Перегляньте й прийміть угоду про обмін даними (14 днів).",
     }
-    notify([requester], f"GEDH: заявка {req.number}", texts[req.status])
+    notify(db, [requester], f"GEDH: заявка {req.number}", texts[req.status], req_link(req))
     return request_out(db, req)
 
 
@@ -716,17 +737,21 @@ def accept_agreement(
     db.commit()
     d = db.get(RestrictedDataset, req.target_dataset_id)
     notify(
+        db,
         [user],
         f"GEDH: дозвіл за заявкою {req.number}",
         f"Дозвіл на «{d.title_ua}» за період {start} … {end} діє до {grant.valid_to:%d.%m.%Y}.",
+        "/grants",
     )
     owners = db.scalars(
         select(User).where(User.organization_id == d.owner_org_id, User.role == Role.DATA_PROVIDER)
     )
     notify(
+        db,
         list(owners) + admins(db),
         f"GEDH: видано дозвіл {req.number}",
         "Заявник прийняв угоду; дозвіл видано.",
+        req_link(req),
     )
     return grant_out(db, grant)
 
@@ -816,4 +841,64 @@ def confirm_deletion(
             on_behalf_of_id=user.organization_id,
         )
         db.commit()
+    return grant_out(db, g)
+
+
+class SuspendIn(BaseModel):
+    reason: str = Field(min_length=10, max_length=2000)
+
+
+@router.post("/grants/{grant_id}/suspend")
+def suspend_grant(
+    grant_id: uuid.UUID,
+    body: SuspendIn,
+    request: Request,
+    user: User = Depends(require(Role.DG_OFFICER)),
+    db: Session = Depends(get_db),
+) -> dict:
+    """UC-19 AC1, FR-38: DG-офіцер негайно призупиняє дозвіл із причиною (без причини — 422, EX1).
+
+    Доступ закривається на наступному ж зверненні (AccessPolicy → GRANT_SUSPENDED). Призупинення остаточне:
+    поновлення в звіті не передбачено, тож доступ відновлюється лише новою заявкою (DG-08). Отримувач має
+    видалити дані й підтвердити це (DG-12), як і після завершення строку.
+    """
+    g = db.get(AccessGrant, grant_id)
+    if g is None:
+        raise ApiError(404, "NOT_FOUND")
+    if g.status != GrantStatus.ACTIVE or g.valid_to <= now():
+        raise ApiError(409, "INVALID_STATE", status=grant_out(db, g)["status"])
+    reason = body.reason.strip()
+    g.status, g.suspension_reason = GrantStatus.SUSPENDED, reason
+    dsa = db.get(DataSharingAgreement, g.agreement_id)
+    req = db.get(AccessRequest, dsa.request_id) if dsa else None
+    audit.append(
+        db,
+        action=AuditAction.GRANT_SUSPEND,
+        object_type="grant",
+        object_id=g.id,
+        request_id=request_id(request),
+        actor_id=user.id,
+        actor_role=user.role,
+        on_behalf_of_id=user.organization_id,
+        details={"reason": reason, "number": req.number if req else None, "valid_to": iso(g.valid_to)},
+    )
+    db.commit()
+    d = db.get(RestrictedDataset, g.dataset_id)
+    notify(
+        db,
+        [db.get(User, g.grantee_id)],
+        "GEDH: дозвіл призупинено",
+        f"DG-офіцер призупинив дозвіл на «{d.title_ua}». Причина: {reason}\n"
+        "Доступ закрито. За угодою видаліть отримані дані й підтвердьте видалення "
+        "на сторінці «Мої дозволи» (DG-12).",
+        "/grants",
+    )
+    notify(
+        db,
+        providers_of(db, d.country_code) + admins(db),
+        "GEDH: дозвіл на дані призупинено",
+        f"Дозвіл{f' за заявкою {req.number}' if req else ''} на «{d.title_ua}» призупинено DG-офіцером. "
+        f"Причина: {reason}",
+        "/grants",
+    )
     return grant_out(db, g)

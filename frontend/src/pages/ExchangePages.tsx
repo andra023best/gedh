@@ -1,7 +1,7 @@
 // Обмін закритими даними (UC-08 – UC-11, UC-16, UC-19): заявки з двома погодженнями, угода, дозволи, вивантаження.
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useEffect, useState, type FormEvent } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../lib/authContext';
 import { GRANT_STATUS_UK, REQUEST_STATUS_UK } from '../lib/datasetStatus';
 import { blobFetch } from '../lib/download';
@@ -52,6 +52,7 @@ type Grant = {
   valid_from: string;
   valid_to: string;
   status: string;
+  suspension_reason: string | null;
   deletion_confirmed_at: string | null;
   grantee: string | null;
   is_synthetic: boolean | null;
@@ -354,6 +355,12 @@ export function RequestsPage() {
   const { user } = useAuth();
   const list = useQuery({ queryKey: ['requests'], queryFn: () => api<{ items: Req[] }>('/access-requests') });
   const [selected, setSelected] = useState<Req | null>(null);
+  // посилання зі сповіщення: /requests?id=… відкриває заявку одразу (FR-29)
+  const [params] = useSearchParams();
+  const linked = params.get('id');
+  useEffect(() => {
+    if (linked) void api<Req>(`/access-requests/${linked}`).then(setSelected).catch(() => undefined);
+  }, [linked]);
   const refresh = (r: Req) => {
     setSelected(r);
     void qc.invalidateQueries({ queryKey: ['requests'] });
@@ -485,10 +492,24 @@ export function GrantsPage() {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['grants'] }),
   });
   const mine = user?.role === 'ORG_REPRESENTATIVE';
+  const [suspendError, setSuspendError] = useState<string | null>(null);
+  // UC-19 AC1, FR-38: призупинення лише з причиною (EX1)
+  async function suspend(id: string) {
+    const reason = window.prompt('Причина призупинення дозволу (щонайменше 10 символів):')?.trim();
+    if (!reason) return;
+    setSuspendError(null);
+    try {
+      await post(`/grants/${id}/suspend`, { reason });
+      void qc.invalidateQueries({ queryKey: ['grants'] });
+    } catch (err) {
+      setSuspendError(errorText(err));
+    }
+  }
 
   return (
     <section>
       <h1>{mine ? 'Мої дозволи' : 'Дозволи на закриті дані'}</h1>
+      {suspendError && <p className="error">{suspendError}</p>}
       {grants.data?.length === 0 && <p>Дозволів поки немає.</p>}
       {grants.data && grants.data.length > 0 && (
         <table>
@@ -517,11 +538,18 @@ export function GrantsPage() {
                 <td>
                   {d(g.valid_from)} — {d(g.valid_to)}
                 </td>
-                <td>{GRANT_STATUS_UK[g.status] ?? g.status}</td>
+                <td>
+                  {GRANT_STATUS_UK[g.status] ?? g.status}
+                  {g.suspension_reason && <div className="hint">Причина: {g.suspension_reason}</div>}
+                </td>
                 {!mine && <td>{g.grantee}</td>}
                 <td>
                   {mine && g.status === 'ACTIVE' && <button onClick={() => setOpen(open === g.id ? null : g.id)}>Дані</button>}
-                  {mine && g.status === 'EXPIRED' && !g.deletion_confirmed_at && (
+                  {user?.role === 'DG_OFFICER' && g.status === 'ACTIVE' && (
+                    <button onClick={() => suspend(g.id)}>Призупинити</button>
+                  )}{' '}
+                  {!mine && <Link to={`/datasets/${g.dataset_id}/lineage`}>Походження</Link>}
+                  {mine && g.status !== 'ACTIVE' && !g.deletion_confirmed_at && (
                     <button onClick={() => confirm.mutate(g.id)}>Підтвердити видалення даних</button>
                   )}
                   {g.deletion_confirmed_at && <span className="hint">видалення підтверджено {d(g.deletion_confirmed_at)}</span>}
@@ -531,7 +559,7 @@ export function GrantsPage() {
           </tbody>
         </table>
       )}
-      {mine && grants.data?.some((g) => g.status === 'EXPIRED' && !g.deletion_confirmed_at) && (
+      {mine && grants.data?.some((g) => g.status !== 'ACTIVE' && !g.deletion_confirmed_at) && (
         <p className="warn">
           За угодою після завершення строку дозволу дані треба видалити й підтвердити це тут. До підтвердження нові заявки
           організації не приймаються (DG-12).

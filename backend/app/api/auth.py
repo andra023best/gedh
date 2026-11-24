@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.api import files
@@ -229,6 +229,71 @@ def resend_verification(body: EmailBody, request: Request, db: Session = Depends
         db.commit()
         mail.send(verification_mail(user, token))
     return ACCEPTED
+
+
+# ---------------------------------------------------------------------------- відновлення пароля (FR-35)
+RESET_TTL = timedelta(hours=1)  # FR-35: посилання дійсне 1 год
+
+
+@router.post("/password-reset/request", status_code=202)
+def password_reset_request(body: EmailBody, request: Request, db: Session = Depends(get_db)) -> dict:
+    """Однакова відповідь для будь-якого e-mail — не розкриваємо, чи є обліковий запис (як UC-03 EX1)."""
+    ratelimit.check(request, "mail")
+    user = find_user_by_email(db, body.email.strip())
+    if user is not None and user.status == AccountStatus.ACTIVE:
+        token = issue_token(db, user, "RESET_PASSWORD", RESET_TTL)
+        db.commit()
+        mail.send(
+            mail.Mail(
+                to=user.email,
+                subject="GEDH: відновлення пароля",
+                text="Хтось (можливо, ви) попросив відновити пароль до GEDH.\n\n"
+                "Щоб задати новий пароль, перейдіть за посиланням (дійсне 1 год, одноразове):\n"
+                f"{mail.link('/reset-password', token)}\n\n"
+                "Якщо ви цього не робили, просто проігноруйте лист — пароль не зміниться.",
+            )
+        )
+    return ACCEPTED
+
+
+class PasswordResetIn(BaseModel):
+    token: str
+    password: str
+
+
+@router.post("/password-reset/confirm")
+def password_reset_confirm(body: PasswordResetIn, request: Request, db: Session = Depends(get_db)) -> dict:
+    """Новий пароль за одноразовим токеном; усі сесії відкликаються (вийти на всіх пристроях)."""
+    ratelimit.check(request, "mail")
+    if problems := security.password_problems(body.password):
+        raise ApiError(422, "WEAK_PASSWORD", problems=problems)
+    row = take_token(db, body.token, "RESET_PASSWORD")
+    user = db.get(User, row.user_id)
+    if user is None or user.status != AccountStatus.ACTIVE:
+        raise ApiError(400, "TOKEN_INVALID")
+    user.password_hash = security.hash_password(body.password)
+    user.failed_login_count, user.locked_until = 0, None
+    t = now()
+    revoked = (
+        db.execute(
+            update(UserSession)
+            .where(UserSession.user_id == user.id, UserSession.revoked_at.is_(None))
+            .values(revoked_at=t)
+        ).rowcount
+        or 0
+    )
+    audit.append(
+        db,
+        action=AuditAction.CONFIG_CHANGE,
+        object_type="user",
+        object_id=user.id,
+        request_id=request_id(request),
+        actor_id=user.id,
+        actor_role=user.role,
+        details={"change": "PASSWORD_RESET", "sessions_revoked": revoked},
+    )
+    db.commit()
+    return {"message": "Пароль змінено. Увійдіть з новим паролем."}
 
 
 # ---------------------------------------------------------------------------- уточнення заявки (UC-02 AC1)

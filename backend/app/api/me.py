@@ -1,5 +1,7 @@
 """Власний профіль і права суб'єкта персональних даних (UC-21; FR-34, FR-42; DG-10, DG-12, DG-24)."""
 
+import hashlib
+import json
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -14,11 +16,13 @@ from app.core import audit, consent, security
 from app.core.deps import current_user, get_db, request_id
 from app.core.errors import ApiError
 from app.core.proxy_guard import client_ip
+from app.models.audit import AuditEvent
 from app.models.datasets import RestrictedDataset
 from app.models.enums import AccountStatus, AuditAction, ConsentAction, GrantStatus, Role
-from app.models.exchange import AccessGrant
-from app.models.identity import ConsentRecord, User
+from app.models.exchange import AccessGrant, AccessRequest, DataExport
+from app.models.identity import ConsentRecord, RegistrationRequest, User
 from app.models.identity import Session as UserSession
+from app.models.technical import Notification
 
 router = APIRouter(prefix="/me", tags=["me"])
 
@@ -185,3 +189,134 @@ def delete_me(
     response.delete_cookie(REFRESH_COOKIE, path="/api/auth")
     response.delete_cookie(CSRF_COOKIE, path="/")
     return response
+
+
+@router.get("/export")
+def export_personal_data(
+    request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)
+) -> Response:
+    """UC-21 AC1, FR-41 (GDPR ст. 15, 20): персональні дані, заявки й історія входів користувача — JSON.
+
+    Файл формується одразу й віддається для збереження, на сервері не зберігається (замість посилання
+    на 24 год зі звіту — S-34). Значень закритих даних у файлі немає — лише метадані заявок і дозволів.
+    """
+    iso = serializers.iso
+    rr = db.scalar(select(RegistrationRequest).where(RegistrationRequest.user_id == user.id))
+    logins = db.scalars(
+        select(AuditEvent)
+        .where(
+            AuditEvent.actor_id == user.id,
+            AuditEvent.action.in_([AuditAction.LOGIN, AuditAction.LOGIN_FAILED]),
+        )
+        .order_by(AuditEvent.seq)
+    )
+    data = {
+        "format": "GEDH personal data export v1",
+        "generated_at": iso(datetime.now(UTC)),
+        "profile": serializers.me(db, user),
+        "account": {"status": user.status.value, "created_at": iso(user.created_at)},
+        "registration_request": {
+            "submitted_at": iso(rr.submitted_at),
+            "account_type": rr.account_type.value,
+            "purpose": rr.purpose,
+            "status": rr.status.value,
+            "decided_at": iso(rr.decided_at),
+            "decision_reason": rr.decision_reason,
+        }
+        if rr
+        else None,
+        "consents": [
+            {
+                "text_version": c.text_version,
+                "action": c.action.value,
+                "recorded_at": iso(c.recorded_at),
+                "ip": c.ip_address,
+            }
+            for c in db.scalars(
+                select(ConsentRecord)
+                .where(ConsentRecord.user_id == user.id)
+                .order_by(ConsentRecord.recorded_at)
+            )
+        ],
+        "login_history": [
+            {"at": iso(e.occurred_at), "result": e.result.value, "request_id": e.request_id} for e in logins
+        ],
+        "sessions": [
+            {"issued_at": iso(s.issued_at), "expires_at": iso(s.expires_at), "revoked_at": iso(s.revoked_at)}
+            for s in db.scalars(
+                select(UserSession).where(UserSession.user_id == user.id).order_by(UserSession.issued_at)
+            )
+        ],
+        "access_requests": [
+            {
+                "number": r.number,
+                "status": r.status.value,
+                "submitted_at": iso(r.submitted_at),
+                "country": r.country_code,
+                "category": r.category_code,
+                "period": [iso(r.period_start), iso(r.period_end)],
+                "purpose": r.purpose,
+                "usage_place": r.usage_place,
+                "responsible_person": r.responsible_person,
+                "requested_term_days": r.requested_term_days,
+            }
+            for r in db.scalars(
+                select(AccessRequest)
+                .where(AccessRequest.requester_id == user.id)
+                .order_by(AccessRequest.submitted_at)
+            )
+        ],
+        "grants": [
+            {
+                "id": str(g.id),
+                "dataset_id": str(g.dataset_id),
+                "period": [iso(g.period_start), iso(g.period_end)],
+                "valid_from": iso(g.valid_from),
+                "valid_to": iso(g.valid_to),
+                "status": g.status.value,
+                "deletion_confirmed_at": iso(g.deletion_confirmed_at),
+            }
+            for g in db.scalars(select(AccessGrant).where(AccessGrant.grantee_id == user.id))
+        ],
+        "data_exports": [
+            {
+                "at": iso(x.created_at),
+                "format": x.format.value,
+                "records": x.records_count,
+                "file_sha256": x.file_hash,
+            }
+            for x in db.scalars(
+                select(DataExport).where(DataExport.exported_by_id == user.id).order_by(DataExport.created_at)
+            )
+        ],
+        "notifications": [
+            {"at": iso(n.created_at), "title": n.title, "text": n.text, "read_at": iso(n.read_at)}
+            for n in db.scalars(
+                select(Notification).where(Notification.user_id == user.id).order_by(Notification.created_at)
+            )
+        ],
+        "retention": "Строки зберігання — у тексті згоди (табл. 3.26 звіту); після видалення облікового "
+        "запису "
+        "дані анонімізуються через 30 днів.",
+    }
+    body = json.dumps(data, ensure_ascii=False, indent=2).encode()
+    sha = hashlib.sha256(body).hexdigest()
+    audit.append(
+        db,
+        action=AuditAction.PERSONAL_DATA_EXPORT,
+        object_type="user",
+        object_id=user.id,
+        request_id=request_id(request),
+        actor_id=user.id,
+        actor_role=user.role,
+        details={"file_sha256": sha, "sections": sorted(data)},
+    )
+    db.commit()
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="gedh-my-data-{datetime.now(UTC):%Y%m%d}.json"',
+            "X-Content-SHA256": sha,
+        },
+    )

@@ -29,8 +29,8 @@ from app.models.datasets import (
     RestrictedDataset,
     SourceReference,
 )
-from app.models.enums import AuditAction, AuditResult, ExportChannel, ExportFormat, VersionStatus
-from app.models.exchange import DataExport, data_export_versions
+from app.models.enums import AuditAction, AuditResult, ExportChannel, ExportFormat, Role, VersionStatus
+from app.models.exchange import AccessGrant, DataExport, data_export_versions
 from app.models.identity import Organization, User
 from app.models.ingestion import Connector, ImportRun, QualityReport
 
@@ -427,3 +427,132 @@ def coverage(db: Session = Depends(get_db)) -> list[dict]:
         .group_by(Observation.country_code)
     ).all()
     return [{"country": c, "indicators": n} for c, n in sorted(rows)]
+
+
+# ---------------------------------------------------------------------------- походження (FR-33)
+@router.get("/datasets/{dataset_id}/lineage")
+def lineage(
+    dataset_id: uuid.UUID, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)
+) -> dict:
+    """FR-33, DG-16, UC-05 крок 6, UC-15 AC2: джерело → імпорт / завантаження → перевірка → версія →
+    дозволи → вивантаження.
+
+    Хто бачить: відкритий набір — будь-який активний користувач; закритий — той, хто має доступ до значень
+    (AccessPolicy: власник, DG-офіцер, чинний дозвіл), інакше 403 із записом у журнал.
+    Дозволи й вивантаження інших організацій бачать лише DG-офіцер і організація-власник;
+    отримувач — лише свої.
+    """
+    d = db.get(Dataset, dataset_id)
+    if d is None:
+        raise ApiError(404, "NOT_FOUND")
+    restricted = isinstance(d, RestrictedDataset)
+    rid = request_id(request)
+    if restricted:
+        decision = access.authorize(db, user, d, None, None)
+        if not decision.allowed:
+            audit.append(
+                db,
+                action=AuditAction.DATA_VIEW,
+                result=AuditResult.DENIED,
+                object_type="dataset",
+                object_id=d.id,
+                request_id=rid,
+                actor_id=user.id,
+                actor_role=user.role,
+                on_behalf_of_id=user.organization_id,
+                details={"view": "lineage", "reason": decision.reason},
+            )
+            db.commit()
+            raise ApiError(403, decision.reason)
+    sees_all = user.role == Role.DG_OFFICER or (restricted and user.organization_id == d.owner_org_id)
+
+    def org_name(org_id) -> str | None:
+        o = db.get(Organization, org_id) if org_id else None
+        return o.name if o else None
+
+    def role_of(user_id) -> str | None:
+        u = db.get(User, user_id) if user_id else None
+        return u.role.value if u else None
+
+    grants_q = select(AccessGrant).where(AccessGrant.dataset_id == d.id).order_by(AccessGrant.valid_from)
+    if not sees_all:
+        grants_q = grants_q.where(AccessGrant.grantee_id == user.id)
+    grants = [
+        {
+            "id": str(g.id),
+            "organization": org_name(db.get(User, g.grantee_id).organization_id),
+            "period": [iso(g.period_start), iso(g.period_end)],
+            "valid_from": iso(g.valid_from),
+            "valid_to": iso(g.valid_to),
+            "status": g.status.value,
+            "suspension_reason": g.suspension_reason,
+            "deletion_confirmed_at": iso(g.deletion_confirmed_at),
+        }
+        for g in db.scalars(grants_q)
+    ]
+    versions = []
+    for v in db.scalars(
+        select(DatasetVersion).where(DatasetVersion.dataset_id == d.id).order_by(DatasetVersion.version_no)
+    ):
+        qr = db.scalars(select(QualityReport).where(QualityReport.version_id == v.id)).first()
+        prev = db.get(DatasetVersion, v.previous_id) if v.previous_id else None
+        exports_q = (
+            select(DataExport)
+            .join(data_export_versions, data_export_versions.c.export_id == DataExport.id)
+            .where(data_export_versions.c.version_id == v.id)
+            .order_by(DataExport.created_at)
+        )
+        if not sees_all:
+            exports_q = exports_q.where(DataExport.exported_by_id == user.id)
+        versions.append(
+            {
+                "version_no": v.version_no,
+                "status": v.status.value,
+                "created_at": iso(v.created_at),
+                "source": source_info(db, d, v),  # 1–2: першоджерело / запуск конектора і хеш сирих даних
+                "file_sha256": v.file_hash,
+                "uploaded_by_role": role_of(v.uploaded_by_id),
+                "quality": {  # 3: DQ-звіт
+                    "score": qr.score,
+                    "records": qr.records_total,
+                    "critical": qr.critical_count,
+                    "warnings": qr.warning_count,
+                    "warnings_confirmed_at": iso(qr.warnings_confirmed_at),
+                }
+                if qr
+                else None,
+                "published_at": iso(v.published_at),  # 4: рішення про публікацію — хто (роль) і коли
+                "published_by_role": role_of(v.published_by_id),
+                "rejection_reason": v.rejection_reason,
+                "previous_version_no": prev.version_no if prev else None,
+                "exports": [  # 6: вивантаження з хешами файлів
+                    {
+                        "at": iso(x.created_at),
+                        "format": x.format.value,
+                        "records": x.records_count,
+                        "file_sha256": x.file_hash,
+                        "grant_id": str(x.grant_id) if x.grant_id else None,
+                        "organization": org_name(db.get(User, x.exported_by_id).organization_id),
+                    }
+                    for x in db.scalars(exports_q)
+                ],
+            }
+        )
+    audit.append(
+        db,
+        action=AuditAction.DATA_VIEW,
+        object_type="dataset",
+        object_id=d.id,
+        request_id=rid,
+        actor_id=user.id,
+        actor_role=user.role,
+        on_behalf_of_id=user.organization_id,
+        details={"view": "lineage", "versions": len(versions), "scope": "all" if sees_all else "own"},
+    )
+    db.commit()
+    return {
+        "dataset": summary(db, d),
+        "scope": "all" if sees_all else "own",
+        "versions": versions,
+        "grants": grants,  # 5: дозволи, що поширюються на набір
+    }

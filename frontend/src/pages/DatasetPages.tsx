@@ -1,6 +1,7 @@
 // UC-12 (постачальник: завантаження, DQ-звіт, підтвердження попереджень) і UC-13 (DG-офіцер: перевірка, публікація).
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { blobFetch } from '../lib/download';
 import { errorText } from '../lib/messages';
 import { api, ApiError, post } from '../lib/session';
@@ -130,6 +131,14 @@ export function ProviderPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [comment, setComment] = useState('');
+
+  // посилання зі сповіщення: /provider?version=… відкриває звіт версії (FR-29)
+  const [params] = useSearchParams();
+  const linkedVersion = params.get('version');
+  useEffect(() => {
+    if (linkedVersion) void openVersion(linkedVersion);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkedVersion]);
 
   // Відкрити будь-яку версію: DQ-звіт, причина відхилення; для карантину — підтвердження попереджень пізніше
   async function openVersion(id: string) {

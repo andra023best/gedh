@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.api import exchange
 from app.api.serializers import iso
-from app.core import audit, mail
+from app.core import audit, notifier
 from app.core.deps import current_user, get_db, request_id, require
 from app.core.errors import ApiError
 from app.ingestion import quality, upload
@@ -138,9 +138,9 @@ def published_version(db: Session, dataset_id: uuid.UUID) -> DatasetVersion | No
     ).first()
 
 
-def notify_role(db: Session, role: Role, subject: str, text: str) -> None:
-    for u in db.scalars(select(User).where(User.role == role, User.status == AccountStatus.ACTIVE)):
-        mail.send(mail.Mail(to=u.email, subject=subject, text=text))
+def notify_role(db: Session, role: Role, subject: str, text: str, link: str | None = None) -> None:
+    users = db.scalars(select(User).where(User.role == role, User.status == AccountStatus.ACTIVE)).all()
+    notifier.notify(db, users, subject, text, link=link)
 
 
 # ---------------------------------------------------------------------------- постачальник
@@ -384,6 +384,7 @@ async def upload_dataset(
             Role.DG_OFFICER,
             "GEDH: новий набір на перевірку",
             f"Набір «{dataset.title_ua}», версія {next_no}, очікує перевірки першоджерела й публікації.",
+            "/dg/review",
         )
     return version_out(db, version)
 
@@ -450,6 +451,7 @@ def confirm_warnings(
         Role.DG_OFFICER,
         "GEDH: новий набір на перевірку",
         f"Набір «{d.title_ua}», версія {v.version_no} (з підтвердженими попередженнями), очікує перевірки.",
+        "/dg/review",
     )
     return version_out(db, v)
 
@@ -468,8 +470,7 @@ def review_queue(user: User = Depends(dg_only), db: Session = Depends(get_db)) -
 
 def notify_uploader(db: Session, v: DatasetVersion, subject: str, text: str) -> None:
     u = db.get(User, v.uploaded_by_id) if v.uploaded_by_id else None
-    if u is not None:
-        mail.send(mail.Mail(to=u.email, subject=subject, text=text))
+    notifier.notify(db, [u], subject, text, link=f"/provider?version={v.id}")
 
 
 @router.post("/dataset-versions/{version_id}/publish")
@@ -511,9 +512,11 @@ def publish(
     db.commit()
     for r in waiting:
         exchange.notify(
+            db,
             [db.get(User, r.requester_id)],
             f"GEDH: заявка {r.number}",
             "Дані опубліковано. Перегляньте й прийміть угоду про обмін даними (14 днів).",
+            exchange.req_link(r),
         )
     notify_uploader(
         db,

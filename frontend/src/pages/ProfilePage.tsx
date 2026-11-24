@@ -2,6 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { blobFetch } from '../lib/download';
 import { errorText, ROLE_UK } from '../lib/messages';
 import { api, clearSession, post } from '../lib/session';
 
@@ -19,6 +20,7 @@ type Me = {
 };
 
 export default function ProfilePage() {
+  const [exported, setExported] = useState<string | null>(null);
   const qc = useQueryClient();
   const navigate = useNavigate();
   const me = useQuery({ queryKey: ['me'], queryFn: () => api<Me>('/me') });
@@ -128,6 +130,18 @@ export default function ProfilePage() {
           ))}
         </tbody>
       </table>
+
+      <h2>Мої дані у файлі</h2>
+      <p>
+        Копія всіх ваших персональних даних, заявок, дозволів та історії входів у форматі JSON (UC-21, право
+        на доступ і перенесення даних). Файл формується одразу й на сервері не зберігається.
+      </p>
+      <p>
+        <button onClick={() => void blobFetch('/me/export').then((h) => setExported(h.get('x-content-sha256')))}>
+          Завантажити мої дані (JSON)
+        </button>
+        {exported && <span className="hint"> Файл збережено. SHA-256: {exported}</span>}
+      </p>
 
       <h2>Видалити обліковий запис або відкликати згоду</h2>
       {!del.open ? (

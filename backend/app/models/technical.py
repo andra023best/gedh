@@ -58,3 +58,23 @@ class StoredFile(Base):
     data: Mapped[bytes] = mapped_column(LargeBinary)
     created_at: Mapped[datetime] = created_at()
     delete_after: Mapped[datetime | None] = tz()
+
+
+class Notification(Base):
+    """Сповіщення в інтерфейсі (FR-29); той самий текст іде листом (FR-39).
+
+    Без значень закритих даних (DG-25). `kind` + `ref` — щоб не надсилати повторно те саме нагадування
+    (UC-19 AC2: за 7 днів до завершення дозволу). Зберігається 180 днів (S-34).
+    """
+
+    __tablename__ = "notifications"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(40))
+    ref: Mapped[str | None] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(String(200))
+    text: Mapped[str] = mapped_column(Text)
+    link: Mapped[str | None] = mapped_column(String(300))
+    created_at: Mapped[datetime] = created_at()
+    read_at: Mapped[datetime | None] = tz()

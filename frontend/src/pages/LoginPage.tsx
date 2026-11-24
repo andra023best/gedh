@@ -62,6 +62,9 @@ export default function LoginPage() {
       <p>
         Немає облікового запису? <Link to="/register">Зареєструватися</Link>
       </p>
+      <p>
+        <Link to="/forgot-password">Забули пароль?</Link>
+      </p>
     </section>
   );
 }

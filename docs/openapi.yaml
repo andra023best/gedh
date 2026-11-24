@@ -1369,6 +1369,227 @@ paths:
           description: "`INVALID_STATE` — дозвіл ще чинний"
           content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
 
+  # ================================================================ Е6а (S-34)
+  /grants/{id}/suspend:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [agreements]
+      summary: Призупинити дозвіл (DG-офіцер)
+      description: |
+        UC-19 AC1, FR-38: негайно, лише з причиною (без причини — 422, UC-19 EX1). Доступ закривається на наступному
+        зверненні (`GRANT_SUSPENDED`). Призупинення остаточне — доступ відновлюється лише новою заявкою (DG-08).
+        Отримувач видаляє дані й підтверджує це (DG-12); до того нові заявки організації не приймаються.
+        Сповіщення — отримувачу, постачальникам країни й адміністраторам.
+      operationId: suspendGrant
+      x-roles: [DG_OFFICER]
+      x-priority: Should
+      x-fr: [FR-38]
+      x-uc: [UC-19]
+      x-dg: [DG-05, DG-07, DG-12]
+      x-audit: GRANT_SUSPEND (причина)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 10, maxLength: 2000 }
+      responses:
+        "200":
+          description: Дозвіл призупинено
+          content: { application/json: { schema: { $ref: "#/components/schemas/Grant" } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`INVALID_STATE` — дозвіл уже не чинний"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /datasets/{id}/lineage:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    get:
+      tags: [datasets]
+      summary: Походження набору (lineage)
+      description: |
+        FR-33, DG-16, UC-05 крок 6, UC-15 AC2. Для кожної версії: першоджерело або запуск конектора з хешем
+        сирих даних, хеш файлу, DQ-звіт, хто (роль) і коли опублікував, попередня версія, вивантаження з хешами;
+        для набору — дозволи. Відкритий набір — будь-який активний користувач; закритий — лише з доступом до
+        значень (інакше 403 і запис DENIED). Чужі дозволи й вивантаження бачать лише DG-офіцер і організація-власник
+        (`scope: all`); отримувач — свої (`scope: own`).
+      operationId: getDatasetLineage
+      x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-priority: Should
+      x-fr: [FR-33]
+      x-uc: [UC-05, UC-15]
+      x-dg: [DG-16]
+      x-audit: DATA_VIEW (view = lineage)
+      responses:
+        "200":
+          description: Ланцюжок походження
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [dataset, scope, versions, grants]
+                properties:
+                  dataset: { type: object }
+                  scope: { type: string, enum: [all, own] }
+                  versions: { type: array, items: { type: object } }
+                  grants: { type: array, items: { type: object } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /notifications:
+    get:
+      tags: [me]
+      summary: Мої сповіщення
+      description: |
+        FR-29: зміни статусу заявок, наборів і дозволів; той самий текст іде листом (FR-39). Без значень закритих
+        даних (DG-25). Зберігаються 180 днів. Перегляд сповіщень у журнал аудиту не пишеться.
+      operationId: listNotifications
+      x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-priority: Should
+      x-fr: [FR-29, FR-39]
+      x-uc: [UC-08, UC-09, UC-10, UC-11, UC-12, UC-13, UC-19]
+      parameters:
+        - { name: unread_only, in: query, schema: { type: boolean, default: false } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 30 } }
+      responses:
+        "200":
+          description: Сповіщення й кількість непрочитаних
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, unread]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, kind, title, text, created_at]
+                      properties:
+                        id: { type: string, format: uuid }
+                        kind: { type: string }
+                        title: { type: string }
+                        text: { type: string }
+                        link: { type: [string, "null"], description: "Сторінка сайту, напр. /requests?id=…" }
+                        created_at: { type: string, format: date-time }
+                        read_at: { type: [string, "null"], format: date-time }
+                  unread: { type: integer, minimum: 0 }
+
+  /notifications/{id}/read:
+    parameters:
+      - $ref: "#/components/parameters/PathId"
+    post:
+      tags: [me]
+      summary: Позначити сповіщення прочитаним
+      operationId: markNotificationRead
+      x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-priority: Should
+      x-fr: [FR-29]
+      responses:
+        "200": { description: Сповіщення }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /notifications/read-all:
+    post:
+      tags: [me]
+      summary: Позначити всі сповіщення прочитаними
+      operationId: markAllNotificationsRead
+      x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-priority: Should
+      x-fr: [FR-29]
+      responses:
+        "200": { description: "Скільки позначено: `marked`" }
+
+  /me/export:
+    get:
+      tags: [me]
+      summary: Експорт власних персональних даних (JSON)
+      description: |
+        UC-21 AC1, FR-41 (GDPR ст. 15, 20): профіль, заявка на реєстрацію, згоди, історія входів, сесії, заявки
+        на дані, дозволи, вивантаження, сповіщення. Файл віддається одразу й на сервері не зберігається (замість
+        посилання на 24 год — S-34). SHA-256 — у заголовку й журналі.
+      operationId: exportPersonalData
+      x-roles: [ANALYST, ORG_REPRESENTATIVE, DATA_PROVIDER, ADMIN, DG_OFFICER]
+      x-priority: Should
+      x-fr: [FR-41]
+      x-uc: [UC-21]
+      x-dg: [DG-09]
+      x-audit: PERSONAL_DATA_EXPORT (хеш файлу)
+      responses:
+        "200":
+          description: Файл JSON
+          headers:
+            X-Content-SHA256: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { type: object }
+
+  /auth/password-reset/request:
+    post:
+      tags: [auth]
+      summary: Запросити посилання для відновлення пароля
+      description: |
+        FR-35: однакова відповідь 202 для будь-якого e-mail (не розкриваємо, чи є обліковий запис). Активному
+        користувачу — лист з одноразовим посиланням `/reset-password?token=…`, дійсним 1 год. Ліміт — як для листів.
+      operationId: requestPasswordReset
+      security: []
+      x-roles: [GUEST]
+      x-priority: Should
+      x-fr: [FR-35]
+      x-uc: [UC-03]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string }
+      responses:
+        "202":
+          description: Лист надіслано, якщо дані коректні
+          content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } }
+        "429": { description: "`RATE_LIMITED`" }
+
+  /auth/password-reset/confirm:
+    post:
+      tags: [auth]
+      summary: Задати новий пароль за посиланням
+      description: |
+        FR-35: токен одноразовий (повторно — 400 `TOKEN_INVALID`), прострочений — 410 `TOKEN_EXPIRED`; пароль — за
+        тими самими правилами, що й під час реєстрації (422 `WEAK_PASSWORD`). Усі сесії користувача відкликаються.
+      operationId: confirmPasswordReset
+      security: []
+      x-roles: [GUEST]
+      x-priority: Should
+      x-fr: [FR-35]
+      x-uc: [UC-03]
+      x-audit: CONFIG_CHANGE (change = PASSWORD_RESET)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          description: Пароль змінено
+          content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } }
+        "400": { description: "`TOKEN_INVALID`" }
+        "410": { description: "`TOKEN_EXPIRED`" }
+        "422": { description: "`WEAK_PASSWORD`" }
+
   # ================================================================ audit
   /audit/events:
     get:
@@ -1562,10 +1783,11 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [expired, offers_cancelled]
+                required: [expired, offers_cancelled, reminded]
                 properties:
                   expired: { type: integer, minimum: 0 }
                   offers_cancelled: { type: integer, minimum: 0 }
+                  reminded: { type: integer, minimum: 0, description: "UC-19 AC2: нагадувань за 7 днів" }
         "401":
           description: "`JOB_TOKEN_INVALID`"
           content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
@@ -1577,7 +1799,7 @@ paths:
       description: |
         Табл. 3.26 звіту (DG-23, DG-24). Облікові записи, деактивовані понад 30 днів (а також відхилені
         реєстрації й непідтверджені e-mail понад 30 днів), анонімізуються. Файли з минулим `delete_after`,
-        сирі відповіді API старші 90 днів, прострочені токени й сесії видаляються. Кожна категорія з кількістю —
+        сирі відповіді API старші 90 днів, прострочені токени й сесії, сповіщення старші 180 днів видаляються. Кожна категорія з кількістю —
         `RETENTION_PURGE`, кожна анонімізація — `ACCOUNT_DELETE`. Журнал аудиту не змінюється (DG-19). Ідемпотентно.
       operationId: jobRetention
       security:

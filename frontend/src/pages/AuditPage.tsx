@@ -2,6 +2,7 @@
 // Кожен перегляд, перевірка цілісності й експорт самі записуються в журнал (постумова UC-15).
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { Link } from 'react-router-dom';
 import { AUDIT_ACTION_UK, AUDIT_RESULT_UK, OBJECT_TYPE_UK } from '../lib/auditLabels';
 import { blobFetch } from '../lib/download';
 import { errorText, ROLE_UK } from '../lib/messages';
@@ -315,6 +316,11 @@ export default function AuditPage() {
         </p>
       )}
       {msg && <p className={msg.ok ? 'ok' : 'error'}>{msg.text}</p>}
+      {applied.dataset_id && (
+        <p>
+          <Link to={`/datasets/${applied.dataset_id}/lineage`}>Походження цього набору (UC-15 AC2)</Link>
+        </p>
+      )}
 
       {open !== null && <Details seq={open} onClose={() => setOpen(null)} />}
 

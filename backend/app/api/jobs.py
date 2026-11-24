@@ -11,12 +11,13 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, BackgroundTasks, Request
 from sqlalchemy import delete, or_, select
 
-from app.api.exchange import OFFER_TTL, notify
+from app.api.exchange import OFFER_TTL, notify, providers_of
 from app.core import audit
 from app.core.config import get_settings
 from app.core.db import new_session
 from app.core.deps import request_id
 from app.core.errors import ApiError
+from app.core.notifier import already_sent
 from app.ingestion.service import run_all
 from app.models.datasets import RestrictedDataset
 from app.models.enums import (
@@ -30,7 +31,7 @@ from app.models.enums import (
 from app.models.exchange import AccessGrant, AccessRequest, DataSharingAgreement
 from app.models.identity import ApiKey, RegistrationRequest, User
 from app.models.identity import Session as UserSession
-from app.models.technical import ActionToken, RawPayload, StoredFile
+from app.models.technical import ActionToken, Notification, RawPayload, StoredFile
 
 router = APIRouter(prefix="/internal/jobs", tags=["internal"])
 
@@ -104,12 +105,46 @@ def expire_grants(rid: str, now: datetime | None = None) -> dict:
         for g in expired:
             d = db.get(RestrictedDataset, g.dataset_id)
             notify(
+                db,
                 [db.get(User, g.grantee_id)],
                 "GEDH: строк дозволу завершився",
                 f"Дозвіл на «{d.title_ua}» завершився. За угодою видаліть отримані дані й підтвердьте "
                 "видалення на сторінці «Мої дозволи» (DG-12).",
+                "/grants",
             )
-    return {"expired": len(expired), "offers_cancelled": len(cancelled)}
+            # UC-19 крок 4: постачальника теж повідомляють
+            notify(
+                db,
+                providers_of(db, d.country_code),
+                "GEDH: дозвіл на ваші дані завершився",
+                f"Строк дозволу на «{d.title_ua}» минув; доступ закрито, отримувач підтвердить видалення.",
+                "/grants",
+            )
+        # UC-19 AC2: за 7 днів до завершення — одне нагадування отримувачу
+        reminded = 0
+        soon = db.scalars(
+            select(AccessGrant).where(
+                AccessGrant.status == GrantStatus.ACTIVE,
+                AccessGrant.valid_to > now,
+                AccessGrant.valid_to <= now + REMIND_BEFORE,
+            )
+        ).all()
+        for g in soon:
+            if already_sent(db, g.grantee_id, "GRANT_EXPIRY_REMINDER", str(g.id)):
+                continue
+            d = db.get(RestrictedDataset, g.dataset_id)
+            notify(
+                db,
+                [db.get(User, g.grantee_id)],
+                "GEDH: дозвіл скоро завершиться",
+                f"Дозвіл на «{d.title_ua}» діє до {g.valid_to:%d.%m.%Y}. Після цього дані треба "
+                "буде видалити й підтвердити видалення (DG-12); продовження — лише новою заявкою (DG-08).",
+                "/grants",
+                kind="GRANT_EXPIRY_REMINDER",
+                ref=str(g.id),
+            )
+            reminded += 1
+    return {"expired": len(expired), "offers_cancelled": len(cancelled), "reminded": reminded}
 
 
 @router.post("/expire-grants")
@@ -118,6 +153,8 @@ def job_expire_grants(request: Request) -> dict:
     return expire_grants(request_id(request) or f"job-{uuid.uuid4()}")
 
 
+REMIND_BEFORE = timedelta(days=7)  # UC-19 AC2
+NOTIFICATION_KEEP = timedelta(days=180)  # S-34: сповіщення — технічні записи
 ANONYMIZE_AFTER = timedelta(days=30)  # табл. 3.26, DG-24: обліковий запис — поки активний + 30 днів
 UNCONFIRMED_KEEP = timedelta(days=30)  # реєстрація без підтвердження e-mail — так само 30 днів
 TOKEN_KEEP = timedelta(days=30)  # технічні записи: використані або прострочені токени й сесії
@@ -190,6 +227,9 @@ def apply_retention(rid: str, now: datetime | None = None) -> dict:
             delete(ActionToken).where(
                 or_(ActionToken.expires_at <= now - TOKEN_KEEP, ActionToken.used_at <= now - TOKEN_KEEP)
             )
+        ).rowcount
+        counts["notifications_deleted"] = db.execute(
+            delete(Notification).where(Notification.created_at <= now - NOTIFICATION_KEEP)
         ).rowcount
         counts["sessions_deleted"] = db.execute(
             delete(UserSession).where(

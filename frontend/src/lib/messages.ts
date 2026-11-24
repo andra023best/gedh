@@ -34,6 +34,9 @@ const UK: Record<string, string> = {
   VALIDATION_ERROR: 'Перевірте заповнення полів.',
   NOTHING_TO_UPDATE: 'Немає змін для збереження.',
   DIRECT_ACCESS_FORBIDDEN: 'Доступ лише через сайт.',
+  ACCESS_DENIED: 'Немає доступу до цього набору: потрібен чинний дозвіл.',
+  GRANT_SUSPENDED: 'Дозвіл призупинено DG-офіцером.',
+  GRANT_EXPIRED: 'Строк дозволу минув.',
 };
 
 export const STATUS_UK: Record<string, string> = {

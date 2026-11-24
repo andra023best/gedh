@@ -106,7 +106,8 @@ export function CatalogPage() {
               <td>{d.owner?.name ?? '—'}</td>
               <td>{d.is_synthetic && <strong className="synthetic">СИНТЕТИЧНІ ДАНІ</strong>}</td>
               <td>
-                {user?.role === 'ORG_REPRESENTATIVE' && (
+                {user && <Link to={`/datasets/${d.id}/lineage`}>Походження</Link>}{' '}
+                {user?.role === 'ORG_REPRESENTATIVE' && d.kind === 'RESTRICTED' && (
                   <Link to={`/requests?country=${d.country_code}&category=${d.category_code ?? ''}`}>Подати заявку</Link>
                 )}
               </td>
