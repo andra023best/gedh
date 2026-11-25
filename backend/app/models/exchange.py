@@ -81,6 +81,8 @@ class ApprovalDecision(Base):
     decided_at: Mapped[datetime] = created_at()
     # +decidedBy 1; {decidedBy ≠ requester} — тригер БД (D-01, DG-07, міграція 0001)
     decided_by_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    # S-42: постачальник може зафіксувати версію (вінтаж) замість найновішої — дані із запізненням
+    approved_version_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("dataset_versions.id"))
 
 
 class DataSharingAgreement(Base):
@@ -119,6 +121,8 @@ class AccessGrant(PeriodMixin, Base):
     status: Mapped[GrantStatus] = enum_col(GrantStatus, default=GrantStatus.ACTIVE)
     suspension_reason: Mapped[str | None] = mapped_column(Text)
     deletion_confirmed_at: Mapped[datetime | None] = tz()
+    # S-42: зафіксована версія; порожньо — найновіша опублікована на момент звернення
+    version_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("dataset_versions.id"))
 
 
 # DataExport → DatasetVersion: +sources 1..*

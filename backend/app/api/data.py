@@ -192,7 +192,13 @@ def load_for_user(
         db.commit()
         request.state.denial_audited = True
         raise ApiError(403, decision.reason)
-    if version:
+    pinned = decision.grant.version_id if decision.grant is not None else None
+    if pinned is not None:
+        # S-42: постачальник зафіксував версію — за цим дозволом видається лише вона
+        v = db.get(DatasetVersion, pinned)
+        if version and v is not None and v.version_no != version:
+            v = None
+    elif version:
         v = db.scalars(
             select(DatasetVersion).where(
                 DatasetVersion.dataset_id == d.id, DatasetVersion.version_no == version

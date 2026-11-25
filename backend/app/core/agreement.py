@@ -5,7 +5,7 @@
 
 import hashlib
 
-TEXT_VERSION = "1.0"
+TEXT_VERSION = "1.1"  # 1.1 (S-42): у предметі — версія даних
 
 TEMPLATE = """УГОДА ПРО ОБМІН ДАНИМИ № {number} (GEDH, версія тексту {version})
 
@@ -15,6 +15,7 @@ TEMPLATE = """УГОДА ПРО ОБМІН ДАНИМИ № {number} (GEDH, ве
 
 1. Предмет. Постачальник надає Отримувачу доступ до набору «{dataset}»:
    країна — {country}, категорія — {category}, період даних — {period_start} … {period_end}.
+   Версія даних: {version_text}.
    Строк дії доступу — {term_days} днів від прийняття угоди.{narrowed}
 2. Мета використання: {purpose}
    Місце використання: {usage_place}

@@ -1203,11 +1203,11 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
         "409":
           description: |
-            `DUPLICATE_ACTIVE_REQUEST` — уже є активна заявка на цю комбінацію, поле `existing_id` (UC-08 EX2);
+            `DUPLICATE_ACTIVE_REQUEST` — уже є активна заявка організації на цей набір (або на «країна × категорія», якщо набору ще немає), поле `existing_id` (UC-08 EX2, S-42);
             `DELETION_CONFIRMATION_REQUIRED` — за завершеними дозволами не підтверджено видалення (DG-12, FR-45, Should)
           content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
         "422":
-          description: "`NO_PROVIDER_FOR_COUNTRY` (UC-08 EX3) або помилки полів"
+          description: "`NO_PROVIDER_FOR_COUNTRY` (UC-08 EX3), `DATASET_REQUIRED` (кілька наборів — оберіть один, поле `datasets`), `DATASET_MISMATCH` (S-42) або помилки полів"
           content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
 
   /access-requests/{id}:
@@ -2752,6 +2752,10 @@ components:
         usage_place: { type: string, minLength: 2, maxLength: 300 }
         requested_term_days: { type: integer, minimum: 1, maximum: 180 }
         responsible_person: { type: string, minLength: 2, maxLength: 200 }
+        dataset_id:
+          type: [string, "null"]
+          format: uuid
+          description: "S-42: конкретний набір «країна × категорія»; обов'язковий, якщо їх кілька (422 `DATASET_REQUIRED`, `DATASET_MISMATCH`)"
     ApprovalDecision:
       type: object
       required: [stage, decision, decided_at, decided_by]
@@ -2761,6 +2765,7 @@ components:
         reason: { type: [string, "null"] }
         approved_period: { oneOf: [{ $ref: "#/components/schemas/Period" }, { type: "null" }] }
         approved_term_days: { type: [integer, "null"] }
+        approved_version_no: { type: [integer, "null"], description: "S-42: зафіксована постачальником версія" }
         decided_at: { type: string, format: date-time }
         decided_by: { type: string, description: ПІБ і роль }
     AccessRequest:
@@ -2789,6 +2794,10 @@ components:
         decision: { type: string, enum: [APPROVED, APPROVED_NARROWED, REJECTED] }
         approved_period: { oneOf: [{ $ref: "#/components/schemas/Period" }, { type: "null" }], description: "Для APPROVED_NARROWED — у межах запитаного" }
         approved_term_days: { type: [integer, "null"], minimum: 1, maximum: 180 }
+        version_no:
+          type: [integer, "null"]
+          minimum: 1
+          description: "S-42: надати цю опубліковану версію замість найновішої (дані з запізненням); старіша — звуження обсягу. 422 `UNKNOWN_VERSION`, `NO_VERSIONS_YET`"
         reason: { type: [string, "null"], maxLength: 2000, description: "Обов'язкова для REJECTED" }
     Agreement:
       type: object
@@ -2827,6 +2836,7 @@ components:
         status: { type: string, enum: [ACTIVE, SUSPENDED, EXPIRED] }
         suspension_reason: { type: [string, "null"] }
         deletion_confirmed_at: { type: [string, "null"], format: date-time }
+        version_no: { type: [integer, "null"], description: "S-42: зафіксована версія; null — найновіша опублікована" }
         grantee: { type: string, description: ПІБ }
 
     # ---------------------------------------------------------------- аудит

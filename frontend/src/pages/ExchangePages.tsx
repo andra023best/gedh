@@ -15,6 +15,7 @@ type Decision = {
   reason: string | null;
   approved_period: Period | null;
   approved_term_days: number | null;
+  approved_version_no: number | null;
   decided_at: string;
   decided_by: string | null;
 };
@@ -32,6 +33,7 @@ type Req = {
   responsible_person: string;
   requester: string | null;
   organization: { name: string } | null;
+  target_dataset_id: string | null;
   target_dataset_title: string | null;
   decisions: Decision[];
   clarification_note: string | null;
@@ -54,10 +56,13 @@ type Grant = {
   status: string;
   suspension_reason: string | null;
   deletion_confirmed_at: string | null;
+  version_no: number | null;
   grantee: string | null;
   is_synthetic: boolean | null;
 };
 type Named = { code: string; name_ua: string };
+type Candidate = { id: string; title_ua: string; current_version_no: number | null; updated_at: string | null; kind: string };
+type DatasetCard = { versions: { id: string; version_no: number; status: string; published_at: string | null }[] };
 
 const d = (s: string | null) => (s ? new Date(s).toLocaleDateString('uk-UA') : '—');
 const STEPS: [string, string[]][] = [
@@ -89,6 +94,16 @@ function NewRequestForm({ onCreated }: { onCreated: (r: Req) => void }) {
   const countries = useQuery({ queryKey: ['countries'], queryFn: () => api<Named[]>('/countries') });
   const categories = useQuery({ queryKey: ['categories'], queryFn: () => api<Named[]>('/categories') });
   const [error, setError] = useState<string | null>(null);
+  // S-42: набори обраної «країна × категорія» — заявник обирає конкретний
+  const [combo, setCombo] = useState({ country: params.get('country') ?? '', category: params.get('category') ?? '' });
+  const candidates = useQuery({
+    queryKey: ['candidates', combo.country, combo.category],
+    enabled: Boolean(combo.country && combo.category),
+    queryFn: async () =>
+      (await api<Candidate[]>(`/catalog/datasets?kind=RESTRICTED&country=${combo.country}&category=${combo.category}`)).filter(
+        (x) => x.current_version_no,
+      ),
+  });
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -103,6 +118,7 @@ function NewRequestForm({ onCreated }: { onCreated: (r: Req) => void }) {
         usage_place: f.get('usage_place'),
         requested_term_days: Number(f.get('term')),
         responsible_person: f.get('responsible_person'),
+        dataset_id: f.get('dataset_id') || null,
       });
       e.currentTarget?.reset();
       onCreated(r);
@@ -114,6 +130,8 @@ function NewRequestForm({ onCreated }: { onCreated: (r: Req) => void }) {
           'Спершу підтвердьте видалення даних за завершеним дозволом (сторінка «Дозволи», DG-12).',
         ORGANIZATION_NOT_VERIFIED: 'Подавати заявки може лише представник верифікованої організації.',
         INVALID_PERIOD: 'Початок періоду має бути не пізніше за кінець.',
+        DATASET_REQUIRED: 'Для цієї країни й категорії є кілька наборів — оберіть потрібний.',
+        DATASET_MISMATCH: 'Обраний набір не відповідає країні й категорії.',
       };
       setError(err instanceof ApiError && codes[err.code] ? codes[err.code] : errorText(err));
     }
@@ -124,7 +142,12 @@ function NewRequestForm({ onCreated }: { onCreated: (r: Req) => void }) {
       <h2>Нова заявка на закриті дані</h2>
       <label>
         Країна
-        <select name="country_code" required defaultValue={params.get('country') ?? ''}>
+        <select
+          name="country_code"
+          required
+          defaultValue={params.get('country') ?? ''}
+          onChange={(e) => setCombo({ ...combo, country: e.target.value })}
+        >
           <option value="" disabled>
             — оберіть —
           </option>
@@ -140,7 +163,12 @@ function NewRequestForm({ onCreated }: { onCreated: (r: Req) => void }) {
       </label>
       <label>
         Категорія даних
-        <select name="category_code" required defaultValue={params.get('category') ?? ''}>
+        <select
+          name="category_code"
+          required
+          defaultValue={params.get('category') ?? ''}
+          onChange={(e) => setCombo({ ...combo, category: e.target.value })}
+        >
           <option value="" disabled>
             — оберіть —
           </option>
@@ -151,6 +179,24 @@ function NewRequestForm({ onCreated }: { onCreated: (r: Req) => void }) {
             ))}
         </select>
       </label>
+      {candidates.data && candidates.data.length > 0 && (
+        <label>
+          Набір даних
+          <select name="dataset_id" required key={combo.country + combo.category}>
+            {candidates.data.length > 1 && (
+              <option value="">— оберіть —</option>
+            )}
+            {candidates.data.map((x) => (
+              <option key={x.id} value={x.id}>
+                {x.title_ua} · версія {x.current_version_no}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {candidates.data && candidates.data.length === 0 && (
+        <p className="hint">Набору для цієї країни й категорії ще немає — заявку буде прийнято як запит на дані (UC-08 AC1).</p>
+      )}
       <label>
         Період даних: з
         <input name="start" type="date" required />
@@ -207,6 +253,14 @@ function RequestDetail({ req, onChanged }: { req: Req; onChanged: (r: Req) => vo
     onError: (err) => setError(errorText(err)),
   });
   const needReason = text.trim().length < 5;
+  // S-42: постачальник може дати старішу версію набору (дані із запізненням)
+  const [versionNo, setVersionNo] = useState('');
+  const card = useQuery({
+    queryKey: ['dataset-card', req.target_dataset_id],
+    enabled: role === 'DATA_PROVIDER' && req.status === 'PROVIDER_REVIEW' && Boolean(req.target_dataset_id),
+    queryFn: () => api<DatasetCard>(`/catalog/datasets/${req.target_dataset_id}`),
+  });
+  const pin = versionNo ? { version_no: Number(versionNo) } : {};
 
   return (
     <div className="card">
@@ -250,6 +304,7 @@ function RequestDetail({ req, onChanged }: { req: Req; onChanged: (r: Req) => vo
                 {x.stage === 'ADMIN' ? 'Адміністратор' : 'Постачальник'}: {x.decision}
                 {x.approved_period && ` · період ${d(x.approved_period.start)} — ${d(x.approved_period.end)}`}
                 {x.approved_term_days && ` · строк ${x.approved_term_days} дн.`}
+                {x.approved_version_no && ` · версія ${x.approved_version_no} (зафіксовано)`}
                 {x.reason && ` · ${x.reason}`} ({x.decided_by}, {d(x.decided_at)})
               </li>
             ))}
@@ -276,7 +331,23 @@ function RequestDetail({ req, onChanged }: { req: Req; onChanged: (r: Req) => vo
       {role === 'DATA_PROVIDER' && req.status === 'PROVIDER_REVIEW' && (
         <div>
           <h3>Друге погодження: що й скільки</h3>
-          <button onClick={() => act.mutate({ path: 'provider-decision', body: { decision: 'APPROVED' } })}>Погодити повністю</button>
+          {card.data && card.data.versions.length > 0 && (
+            <p>
+              <label>
+                Версія даних для дозволу{' '}
+                <select value={versionNo} onChange={(e) => setVersionNo(e.target.value)}>
+                  <option value="">найновіша опублікована (оновлюється з новими версіями)</option>
+                  {card.data.versions.map((v) => (
+                    <option key={v.id} value={v.version_no}>
+                      версія {v.version_no} від {d(v.published_at)} — зафіксувати{v.status === 'PUBLISHED' ? ' (чинна)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <span className="hint"> Старіша версія — дані із запізненням (наприклад, щоб не розкривати найсвіжіші значення).</span>
+            </p>
+          )}
+          <button onClick={() => act.mutate({ path: 'provider-decision', body: { decision: 'APPROVED', ...pin } })}>Погодити</button>
           <p>Або звузити обсяг (у межах запитаного):</p>
           <label>
             з <input type="date" value={narrow.start} onChange={(e) => setNarrow({ ...narrow, start: e.target.value })} />
@@ -291,7 +362,7 @@ function RequestDetail({ req, onChanged }: { req: Req; onChanged: (r: Req) => vo
             onClick={() =>
               act.mutate({
                 path: 'provider-decision',
-                body: { decision: 'APPROVED_NARROWED', approved_period: { start: narrow.start, end: narrow.end }, approved_term_days: narrow.term },
+                body: { decision: 'APPROVED_NARROWED', approved_period: { start: narrow.start, end: narrow.end }, approved_term_days: narrow.term, ...pin },
               })
             }
           >
@@ -547,6 +618,7 @@ export function GrantsPage() {
                 <td>
                   {GRANT_STATUS_UK[g.status] ?? g.status}
                   {g.suspension_reason && <div className="hint">Причина: {g.suspension_reason}</div>}
+                  {g.version_no && <div className="hint">версія {g.version_no} (зафіксована постачальником)</div>}
                 </td>
                 {!mine && <td>{g.grantee}</td>}
                 <td>

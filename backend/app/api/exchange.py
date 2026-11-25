@@ -69,6 +69,23 @@ def providers_of(db: Session, country: str) -> list[User]:
     ).all()
 
 
+def published_candidates(db: Session, country: str, category: str) -> list[RestrictedDataset]:
+    """Усі чинні закриті набори «країна × категорія» з опублікованою версією (S-42: заявник обирає один)."""
+    return list(
+        db.scalars(
+            select(RestrictedDataset)
+            .join(DatasetVersion, DatasetVersion.dataset_id == RestrictedDataset.id)
+            .where(
+                RestrictedDataset.country_code == country,
+                RestrictedDataset.category_code == category,
+                RestrictedDataset.status == DatasetStatus.ACTIVE,
+                DatasetVersion.status == VersionStatus.PUBLISHED,
+            )
+            .order_by(RestrictedDataset.title_ua)
+        ).unique()
+    )
+
+
 def published_target(db: Session, country: str, category: str) -> RestrictedDataset | None:
     """Чинний закритий набір для «країна × категорія» з опублікованою версією (найновіший)."""
     return db.scalars(
@@ -103,6 +120,12 @@ def decision_of(db: Session, req: AccessRequest, stage: ApprovalStage) -> Approv
     ).first()
 
 
+def approved_version(db: Session, req: AccessRequest) -> DatasetVersion | None:
+    """S-42: версія, яку зафіксував постачальник; None — найновіша опублікована."""
+    d = decision_of(db, req, ApprovalStage.PROVIDER)
+    return db.get(DatasetVersion, d.approved_version_id) if d and d.approved_version_id else None
+
+
 def approved_scope(db: Session, req: AccessRequest) -> tuple[date, date, int, bool]:
     """Погоджений постачальником обсяг: період, строк, чи звужено (UC-11 AC1)."""
     d = decision_of(db, req, ApprovalStage.PROVIDER)
@@ -132,6 +155,11 @@ def request_out(db: Session, req: AccessRequest) -> dict:
                 if d.approved_period_start
                 else None,
                 "approved_term_days": d.approved_term_days,
+                "approved_version_no": (
+                    db.get(DatasetVersion, d.approved_version_id).version_no
+                    if d.approved_version_id
+                    else None
+                ),
                 "decided_at": iso(d.decided_at),
                 "decided_by": f"{by.full_name} ({by.role.value})" if by else None,
             }
@@ -192,6 +220,14 @@ def can_see(db: Session, user: User, req: AccessRequest) -> bool:
 def offer_agreement(db: Session, req: AccessRequest, target: RestrictedDataset) -> DataSharingAgreement:
     """Формує угоду з погодженим обсягом (UC-10 крок 5) і переводить заявку в AWAITING_AGREEMENT."""
     start, end, term, narrowed = approved_scope(db, req)
+    pinned = approved_version(db, req)
+    if pinned is not None:
+        version_text = (
+            f"версія {pinned.version_no} від {pinned.published_at:%d.%m.%Y}, зафіксована постачальником "
+            "(новіші версії за цим дозволом не надаються)"
+        )
+    else:
+        version_text = "чинна опублікована версія набору на момент звернення"
     owner = db.get(Organization, target.owner_org_id)
     requester_org = db.get(Organization, req.on_behalf_of_id)
     country = db.get(Country, req.country_code)
@@ -210,6 +246,7 @@ def offer_agreement(db: Session, req: AccessRequest, target: RestrictedDataset) 
         purpose=req.purpose,
         usage_place=req.usage_place,
         narrowed=narrowed,
+        version_text=version_text,
     )
     dsa = DataSharingAgreement(
         request_id=req.id, text_version=dsa_text.TEXT_VERSION, text=text, text_hash=dsa_text.text_hash(text)
@@ -228,6 +265,8 @@ def offer_waiting_requests(db: Session, dataset: RestrictedDataset) -> list[Acce
             AccessRequest.status == S.AWAITING_DATA,
             AccessRequest.country_code == dataset.country_code,
             AccessRequest.category_code == dataset.category_code,
+            # S-42: лише заявки без набору або саме на цей набір
+            or_(AccessRequest.target_dataset_id.is_(None), AccessRequest.target_dataset_id == dataset.id),
         )
     ).all()
     for req in waiting:
@@ -249,6 +288,8 @@ class RequestIn(BaseModel):
     usage_place: str = Field(min_length=2, max_length=300)
     requested_term_days: int = Field(ge=1, le=180)
     responsible_person: str = Field(min_length=2, max_length=200)
+    # S-42: конкретний набір; обов'язковий, якщо для «країна × категорія» їх кілька
+    dataset_id: uuid.UUID | None = None
 
 
 @router.post("/access-requests", status_code=201)
@@ -280,12 +321,27 @@ def create_request(
     )
     if unconfirmed:
         raise ApiError(409, "DELETION_CONFIRMATION_REQUIRED", grant_id=str(unconfirmed))
+    candidates = published_candidates(db, body.country_code, body.category_code)
+    if body.dataset_id is not None:
+        target = next((d for d in candidates if d.id == body.dataset_id), None)
+        if target is None:
+            raise ApiError(
+                422, "DATASET_MISMATCH"
+            )  # не той набір / не ця країна чи категорія / не опубліковано
+    elif len(candidates) > 1:
+        raise ApiError(422, "DATASET_REQUIRED", datasets=[str(d.id) for d in candidates])
+    else:
+        target = candidates[0] if candidates else None  # набору може не бути (UC-08 AC1)
+    same = (
+        AccessRequest.target_dataset_id == target.id
+        if target is not None
+        else (AccessRequest.country_code == body.country_code)
+        & (AccessRequest.category_code == body.category_code)
+        & AccessRequest.target_dataset_id.is_(None)
+    )
     existing = db.scalar(
         select(AccessRequest.id).where(
-            AccessRequest.on_behalf_of_id == org.id,
-            AccessRequest.country_code == body.country_code,
-            AccessRequest.category_code == body.category_code,
-            AccessRequest.status.in_(ACTIVE_STATUSES),
+            AccessRequest.on_behalf_of_id == org.id, same, AccessRequest.status.in_(ACTIVE_STATUSES)
         )
     )
     if existing:
@@ -295,7 +351,6 @@ def create_request(
         db.scalar(select(func.count(AccessRequest.id)).where(AccessRequest.number.like(f"GEDH-{year}-%")))
         or 0
     ) + 1
-    target = published_target(db, body.country_code, body.category_code)  # може не бути (UC-08 AC1)
     req = AccessRequest(
         number=f"GEDH-{year}-{seq:04d}",
         requester_id=user.id,
@@ -328,6 +383,7 @@ def create_request(
             "category": req.category_code,
             "term_days": req.requested_term_days,
             "dataset_exists": target is not None,
+            "dataset_id": str(target.id) if target else None,
         },
     )
     db.commit()
@@ -490,6 +546,8 @@ class ProviderDecisionIn(BaseModel):
     approved_period: PeriodIn | None = None
     approved_term_days: int | None = Field(default=None, ge=1, le=180)
     reason: str | None = Field(default=None, max_length=2000)
+    # S-42: номер опублікованої версії, яку надати замість найновішої (дані із запізненням)
+    version_no: int | None = Field(default=None, ge=1)
 
 
 @router.post("/access-requests/{req_id}/provider-decision")
@@ -513,6 +571,7 @@ def provider_decision(
         raise ApiError(409, "INVALID_STATE", status=req.status.value)
     reason = (body.reason or "").strip()
     start = end = term = None
+    pinned = None
     if body.decision == "REJECTED":
         if len(reason) < 5:
             raise ApiError(422, "REASON_REQUIRED")
@@ -524,6 +583,24 @@ def provider_decision(
         if start > end or start < req.period_start or end > req.period_end or term > req.requested_term_days:
             raise ApiError(422, "SCOPE_NOT_NARROWER")
         narrowed = (start, end, term) != (req.period_start, req.period_end, req.requested_term_days)
+        if body.version_no is not None:
+            if target is None:
+                raise ApiError(422, "NO_VERSIONS_YET")  # набір ще не опубліковано — фіксувати нічого
+            pinned = db.scalar(
+                select(DatasetVersion).where(
+                    DatasetVersion.dataset_id == target.id,
+                    DatasetVersion.version_no == body.version_no,
+                    DatasetVersion.published_at.is_not(None),
+                )
+            )
+            if pinned is None:
+                raise ApiError(422, "UNKNOWN_VERSION")
+            latest = db.scalar(
+                select(func.max(DatasetVersion.version_no)).where(
+                    DatasetVersion.dataset_id == target.id, DatasetVersion.status == VersionStatus.PUBLISHED
+                )
+            )
+            narrowed = narrowed or pinned.version_no != latest  # старіша версія — теж звуження обсягу
         if body.decision == "APPROVED" and narrowed:
             body.decision = "APPROVED_NARROWED"
     db.add(
@@ -535,6 +612,7 @@ def provider_decision(
             approved_period_start=start,
             approved_period_end=end,
             approved_term_days=term,
+            approved_version_id=pinned.id if pinned is not None else None,
             decided_by_id=user.id,
         )
     )
@@ -562,6 +640,7 @@ def provider_decision(
             "number": req.number,
             "approved_period": [iso(start), iso(end)] if start else None,
             "term_days": term,
+            "version_no": pinned.version_no if pinned is not None else None,
             "status": req.status.value,
         },
     )
@@ -663,6 +742,8 @@ def grant_out(db: Session, g: AccessGrant) -> dict:
         "deletion_confirmed_at": iso(g.deletion_confirmed_at),
         "grantee": grantee.full_name if grantee else None,
         "is_synthetic": d.is_synthetic if d else None,
+        # S-42: зафіксована постачальником версія; None — найновіша
+        "version_no": db.get(DatasetVersion, g.version_id).version_no if g.version_id else None,
     }
 
 
@@ -697,6 +778,7 @@ def accept_agreement(
         agreement_id=dsa.id,
         grantee_id=user.id,
         dataset_id=req.target_dataset_id,
+        version_id=pinned_version.id if (pinned_version := approved_version(db, req)) else None,
         period_start=start,
         period_end=end,
         valid_from=t,
