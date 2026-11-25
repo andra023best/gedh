@@ -129,7 +129,7 @@ function NewRequestForm({ onCreated }: { onCreated: (r: Req) => void }) {
             — оберіть —
           </option>
           {countries.data
-            ?.slice()
+            ?.filter((c) => (c as { is_active?: boolean }).is_active !== false) // S-41: лише активні
             .sort((a, b) => a.name_ua.localeCompare(b.name_ua, 'uk'))
             .map((c) => (
               <option key={c.code} value={c.code}>
@@ -446,6 +446,12 @@ function GrantData({ grant }: { grant: Grant }) {
         Версія {o.version_no} · видано в межах дозволу {d(o.covered_period?.start ?? null)} — {d(o.covered_period?.end ?? null)}
         {o.coverage === 'PARTIAL' && ' (частина набору поза дозволом не показується)'}
       </p>
+      {o.items.length === 0 && (
+        <p className="warn">
+          У межах дозволу значень немає: дані набору стосуються інших періодів. Зверніться до постачальника або подайте
+          нову заявку з іншим періодом.
+        </p>
+      )}
       <div className="scroll">
         <table className="data">
           <thead>

@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom';
 import { errorText } from '../lib/messages';
 import { api, ApiError } from '../lib/session';
 
-type Country = { code: string; name_ua: string };
+type Country = { code: string; name_ua: string; is_active?: boolean };
 type Org = { id: string; name: string; country_code: string };
 type Consent = { text_version: string; text: string };
 
@@ -15,7 +15,11 @@ export default function RegisterPage() {
   const countries = useQuery({
     queryKey: ['countries'],
     // українська абетка (Є, І, Ї на своїх місцях) — порядок у БД залежить від її налаштувань
-    queryFn: async () => (await api<Country[]>('/countries')).sort((a, b) => a.name_ua.localeCompare(b.name_ua, 'uk')),
+    // лише активні країни: деактивовану адміністратором країну обрати не можна (S-41)
+    queryFn: async () =>
+      (await api<Country[]>('/countries'))
+        .filter((c) => c.is_active !== false)
+        .sort((a, b) => a.name_ua.localeCompare(b.name_ua, 'uk')),
   });
   const orgs = useQuery({ queryKey: ['organizations'], queryFn: () => api<Org[]>('/organizations') });
   const consent = useQuery({ queryKey: ['consent'], queryFn: () => api<Consent>('/auth/consent') });
