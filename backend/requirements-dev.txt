@@ -4,3 +4,4 @@ httpx2==2.16.2
 ruff==0.17.6
 openapi-spec-validator==0.9.0
 PyYAML==6.0.4
+pytest-cov==7.1.0

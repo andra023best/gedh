@@ -204,6 +204,7 @@ def run_connector(
         for i in report.issues
     )
     run.status, run.finished_at = status, datetime.now(UTC)
+    run.warnings_count = len(report.warnings)  # не колонка: лише для зведення адміністратору (DG-22)
     audit.append(
         db,
         action=AuditAction.DATASET_PUBLISH,
@@ -246,6 +247,39 @@ def run_all(
                 "status": run.status.value,
                 "records": run.records_count,
                 "version_id": str(run.produced_version_id) if run.produced_version_id else None,
+                "warnings": getattr(run, "warnings_count", 0),
             }
         )
+    notify_admins(db, out)
     return out
+
+
+STATUS_UK = {"FAILED": "джерело недоступне", "REJECTED_BY_DQ": "відхилено перевіркою якості"}
+
+
+def notify_admins(db: Session, results: list[dict]) -> None:
+    """UC-14 EX1, UC-18 AC1, DG-22 (S-39): зведення адміністраторам — невдалі запуски й попередження якості.
+
+    Один лист / сповіщення на запуск імпорту, а не на кожен конектор; якщо все гаразд — нічого.
+    """
+    problems = [r for r in results if r["status"] != RunStatus.SUCCEEDED.value or r["warnings"]]
+    if not problems:
+        return
+    from app.core import notifier  # локально: notifier тягне пошту, а цей модуль — і для CLI-імпорту
+    from app.models.enums import AccountStatus, Role
+    from app.models.identity import User
+
+    lines = []
+    for r in problems:
+        what = STATUS_UK.get(r["status"], "успішно")
+        warn = f", попереджень якості: {r['warnings']}" if r["warnings"] else ""
+        lines.append(f"• {r['connector']}: {what}{warn}")
+    active_admins = select(User).where(User.role == Role.ADMIN, User.status == AccountStatus.ACTIVE)
+    notifier.notify(
+        db,
+        db.scalars(active_admins).all(),
+        "GEDH: результати імпорту відкритих даних",
+        "Конектори, що потребують уваги (якщо запуск невдалий, наявні дані не змінено):\n" + "\n".join(lines),
+        link="/admin/connectors",
+        kind="IMPORT_SUMMARY",
+    )

@@ -2153,6 +2153,7 @@ paths:
                   expired: { type: integer, minimum: 0 }
                   offers_cancelled: { type: integer, minimum: 0 }
                   reminded: { type: integer, minimum: 0, description: "UC-19 AC2: нагадувань за 7 днів" }
+                  review_reminders: { type: integer, minimum: 0, description: "UC-09 EX2: нагадувань адміністраторам про заявки без розгляду 5 робочих днів (S-39)" }
         "401":
           description: "`JOB_TOKEN_INVALID`"
           content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }

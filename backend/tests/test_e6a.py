@@ -221,3 +221,47 @@ def test_password_reset():
         "/api/auth/password-reset/confirm", json={"token": token2, "password": new_password + "x"}
     )
     assert expired.status_code == 410
+
+
+def test_review_reminder_after_five_business_days(world):
+    """UC-09 EX2 (S-39): заявку не розглянуто 5 робочих днів — одне нагадування адміністратору."""
+    from app.models.exchange import AccessRequest
+
+    w = world
+    req = new_request(w).json()
+    with new_session() as db:
+        db.get(AccessRequest, req["id"]).submitted_at = datetime.now(UTC) - timedelta(days=9)
+        db.commit()
+    assert expire_grants("test-review")["review_reminders"] >= 1
+    expire_grants("test-review-2")
+    with new_session() as db:
+        sent = db.scalars(
+            select(Notification).where(Notification.kind == "REVIEW_REMINDER", Notification.ref == req["id"])
+        ).all()
+    assert sent and len({n.user_id for n in sent}) == len(sent)  # кожному адміністратору — один раз
+    assert any(n.link == f"/requests?id={req['id']}" for n in sent)
+
+
+def test_import_problems_are_reported_to_admins():
+    """UC-14 EX1, DG-22 (S-39): невдалий імпорт — зведення адміністраторам; наявні дані не змінюються."""
+    from app.core.db import new_session as ns
+    from app.ingestion import service
+    from app.models.enums import RunTrigger
+
+    admin = make_user(Role.ADMIN)
+
+    def down(url):
+        raise OSError("source is down")
+
+    with ns() as db:
+        out = service.run_all(
+            db, RunTrigger.MANUAL, "test-import-fail", only={"UNEMP"}, get=down, sleep=lambda s: None
+        )
+    assert out[0]["status"] == "FAILED"
+    with ns() as db:
+        n = db.scalars(
+            select(Notification).where(
+                Notification.user_id == admin.id, Notification.kind == "IMPORT_SUMMARY"
+            )
+        ).one()
+        assert "WB UNEMP" in n.text and "джерело недоступне" in n.text and n.link == "/admin/connectors"

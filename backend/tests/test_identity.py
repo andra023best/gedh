@@ -404,3 +404,20 @@ def test_audit_chain_is_intact(client):
     with new_session() as db:
         assert audit.verify_chain(db) is None  # DG-19: жоден запис не змінено
         assert db.scalar(select(AuditEvent.seq).where(AuditEvent.result == AuditResult.DENIED).limit(1))
+
+
+def test_old_consent_suspends_access_until_new_version_accepted(client, monkeypatch):
+    """DG-10 (S-39): зі старою версією згоди сервер пускає лише до профілю, згоди, копії даних і видалення.
+
+    Записи згоди змінити не можна (тригер DG-10), тож «оновлюємо текст згоди» — підміною поточної версії.
+    """
+    u = make_user()
+    h = auth(login(client, u.email))
+    monkeypatch.setattr(consent, "CURRENT_VERSION", "9.9")
+    r = client.get("/api/catalog/datasets", headers=h)
+    assert r.status_code == 403 and r.json()["detail"] == "CONSENT_UPDATE_REQUIRED"
+    assert client.get("/api/me", headers=h).status_code == 200
+    assert client.get("/api/me/export", headers=h).status_code == 200
+    ok = client.post("/api/me/consent", headers=h, json={"text_version": consent.CURRENT_VERSION})
+    assert ok.status_code == 201
+    assert client.get("/api/catalog/datasets", headers=h).status_code == 200

@@ -9,14 +9,15 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 
 from fastapi import Depends, Request
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core import audit, ratelimit
+from app.core import audit, consent, ratelimit
 from app.core.db import new_session
 from app.core.errors import ApiError
 from app.core.security import decode_access_token, token_hash
-from app.models.enums import AccountStatus, AuditAction, AuditResult, Role
-from app.models.identity import ApiKey, User
+from app.models.enums import AccountStatus, AuditAction, AuditResult, ConsentAction, Role
+from app.models.identity import ApiKey, ConsentRecord, User
 from app.models.identity import Session as UserSession
 
 
@@ -50,7 +51,25 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
         raise ApiError(401, "ACCOUNT_NOT_ACTIVE", status=user.status.value)
     request.state.user = user
     request.state.session_id = session.id
+    require_current_consent(request, db, user)
     return user
+
+
+# DG-10 (S-39): поки не прийнято нову версію згоди, працюють лише профіль, сама згода, копія даних і видалення
+CONSENT_FREE_PATHS = ("/api/me", "/api/me/consent", "/api/me/export", "/api/me/delete", "/api/auth/consent")
+
+
+def require_current_consent(request: Request, db: Session, user: User) -> None:
+    if request.url.path.rstrip("/") in CONSENT_FREE_PATHS:
+        return
+    accepted = db.scalar(
+        select(ConsentRecord.text_version)
+        .where(ConsentRecord.user_id == user.id, ConsentRecord.action == ConsentAction.GIVEN)
+        .order_by(ConsentRecord.recorded_at.desc())
+        .limit(1)
+    )
+    if accepted != consent.CURRENT_VERSION:
+        raise ApiError(403, "CONSENT_UPDATE_REQUIRED", current_version=consent.CURRENT_VERSION)
 
 
 API_KEY_HEADER = "x-api-key"
@@ -72,6 +91,7 @@ def user_by_api_key(request: Request, db: Session, key: str) -> User:
     db.commit()
     request.state.user = user
     request.state.channel = "API"
+    require_current_consent(request, db, user)
     return user
 
 

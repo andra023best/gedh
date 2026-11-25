@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, BackgroundTasks, Request
 from sqlalchemy import delete, or_, select
 
-from app.api.exchange import OFFER_TTL, notify, providers_of
+from app.api.exchange import OFFER_TTL, admins, notify, providers_of, req_link
 from app.core import audit
 from app.core.config import get_settings
 from app.core.db import new_session
@@ -150,7 +150,48 @@ def expire_grants(rid: str, now: datetime | None = None) -> dict:
                 ref=str(g.id),
             )
             reminded += 1
-    return {"expired": len(expired), "offers_cancelled": len(cancelled), "reminded": reminded}
+        # UC-09 EX2 (S-39): заявку не розглянуто 5 робочих днів — одне нагадування кожному адміністратору
+        review_reminded = 0
+        for req in db.scalars(
+            select(AccessRequest).where(AccessRequest.status == AccessRequestStatus.SUBMITTED)
+        ):
+            if business_days_between(req.submitted_at, now) < REVIEW_DAYS:
+                continue
+            for admin in admins(db):
+                if admin.organization_id == req.on_behalf_of_id or already_sent(
+                    db, admin.id, "REVIEW_REMINDER", str(req.id)
+                ):
+                    continue  # DG-07: свою організацію адміністратор не розглядає
+                notify(
+                    db,
+                    [admin],
+                    f"GEDH: заявка {req.number} чекає розгляду",
+                    f"Заявка {req.number} ({req.country_code} × {req.category_code}) подана "
+                    f"{req.submitted_at:%d.%m.%Y} і ще не розглянута (понад {REVIEW_DAYS} робочих днів).",
+                    req_link(req),
+                    kind="REVIEW_REMINDER",
+                    ref=str(req.id),
+                )
+                review_reminded += 1
+    return {
+        "expired": len(expired),
+        "offers_cancelled": len(cancelled),
+        "reminded": reminded,
+        "review_reminders": review_reminded,
+    }
+
+
+REVIEW_DAYS = 5  # UC-09 EX2
+
+
+def business_days_between(start: datetime, end: datetime) -> int:
+    """Повні робочі дні (пн–пт) між датами; свята не враховуються."""
+    d, days = start.date(), 0
+    while d < end.date():
+        d += timedelta(days=1)
+        if d.weekday() < 5 and d <= end.date():
+            days += 1
+    return days
 
 
 @router.post("/expire-grants")
