@@ -166,6 +166,81 @@ function ConnectorRow({ c, onChanged }: { c: Connector; onChanged: (msg: string,
   );
 }
 
+
+// ------------------------------------------------------------------------------------------------ службові задачі (S-40)
+type Job = {
+  name: string;
+  title: string;
+  last_date: string | null;
+  trigger: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  result: Record<string, unknown> | null;
+};
+const TRIGGER_UK: Record<string, string> = { github: 'будильник GitHub', 'catch-up': 'сервер сам', admin: 'адміністратор' };
+
+function jobSummary(j: Job): string {
+  const r = j.result as Record<string, any> | null; // eslint-disable-line @typescript-eslint/no-explicit-any
+  if (!r) return j.started_at && !j.finished_at ? 'виконується…' : '—';
+  if (r.error) return `помилка: ${r.error}`;
+  if (j.name === 'daily') {
+    const b = r.backup?.status === 'ok' ? `копія ${r.backup.snapshot}` : r.backup?.status === 'skipped' ? 'копія вимкнена (немає ключа Neon)' : `копія: ${r.backup?.error ?? '—'}`;
+    return `завершено дозволів: ${r.grants?.expired ?? 0}, нагадувань: ${(r.grants?.reminded ?? 0) + (r.grants?.review_reminders ?? 0)}, анонімізовано: ${r.retention?.accounts_anonymized ?? 0}; ${b}`;
+  }
+  const list = (r.connectors ?? []) as { status: string }[];
+  return list.length ? `запущено ${list.length}, успішно ${list.filter((x) => x.status === 'SUCCEEDED').length}` : 'сьогодні за розкладом нічого';
+}
+
+function JobsSection() {
+  const qc = useQueryClient();
+  const jobs = useQuery({ queryKey: ['jobs'], queryFn: () => api<Job[]>('/admin/jobs'), refetchInterval: 15_000 });
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  async function run(name: string) {
+    try {
+      await post(`/admin/jobs/${name}/run`);
+      setMsg({ ok: true, text: 'Задачу запущено; таблиця оновиться сама.' });
+      void qc.invalidateQueries({ queryKey: ['jobs'] });
+    } catch (err) {
+      setMsg({ ok: false, text: errorText(err) });
+    }
+  }
+  return (
+    <>
+      <h2>Службові задачі</h2>
+      <p className="hint">
+        Щодня після 03:00 UTC сервер сам запускає ці задачі з першим запитом (GitHub лише будить сервер). Кожна виконується раз
+        на день; кнопка запускає її ще раз негайно — це безпечно, задачі ідемпотентні.
+      </p>
+      {msg && <p className={msg.ok ? 'ok' : 'error'}>{msg.text}</p>}
+      <table>
+        <thead>
+          <tr>
+            <th>Задача</th>
+            <th>Останній запуск</th>
+            <th>Результат</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {jobs.data?.map((j) => (
+            <tr key={j.name}>
+              <td>{j.title}</td>
+              <td>
+                {dt(j.started_at)}
+                {j.trigger && <div className="hint">{TRIGGER_UK[j.trigger] ?? j.trigger}</div>}
+              </td>
+              <td>{jobSummary(j)}</td>
+              <td>
+                <button onClick={() => void run(j.name)}>Запустити зараз</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
+  );
+}
+
 export function ConnectorsPage() {
   const qc = useQueryClient();
   const list = useQuery({ queryKey: ['connectors'], queryFn: () => api<Connector[]>('/admin/connectors') });
@@ -178,11 +253,13 @@ export function ConnectorsPage() {
     <section>
       <h1>Конектори імпорту</h1>
       <p className="hint">
-        Щодня о 03:00 UTC планувальник запускає конектори, чий розклад припадає на цей день. Розклад — вираз cron із 5
+        Щодня після 03:00 UTC сервер запускає конектори, чий розклад припадає на цей день. Розклад — вираз cron із 5
         полів «хвилина година день місяць день_тижня»: <code>0 3 * * 1</code> — щопонеділка, <code>0 3 1 * *</code> —
         першого числа. Неправильний вираз не зберігається (UC-20 EX1). Нова версія з'являється лише тоді, коли джерело
         змінило значення.
       </p>
+      <JobsSection />
+      <h2>Конектори</h2>
       {msg && <p className={msg.ok ? 'ok' : 'error'}>{msg.text}</p>}
       {list.error && <p className="error">{errorText(list.error)}</p>}
       {list.data && (

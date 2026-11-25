@@ -4,8 +4,9 @@
 Організації ведуться в admin.py (створення верифікованої, верифікація).
 """
 
+import json
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -15,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.serializers import iso
-from app.core import audit
+from app.core import audit, scheduler
 from app.core.db import new_session
 from app.core.deps import get_db, request_id, require
 from app.core.errors import ApiError
@@ -25,6 +26,7 @@ from app.models.enums import AuditAction, Frequency, Role, RunTrigger
 from app.models.identity import User
 from app.models.ingestion import Connector, ImportRun
 from app.models.reference import Country, DataCategory, Indicator
+from app.models.technical import JobRun
 
 router = APIRouter(prefix="/admin", tags=["admin-config"])
 admin_only = require(Role.ADMIN)
@@ -438,3 +440,51 @@ def update_category(
     log_change(db, request, admin, "category", c.code, changes)
     db.commit()
     return {"code": c.code, "name_ua": c.name_ua, "name_en": c.name_en}
+
+
+# ------------------------------------------------------------------------ службові задачі (S-40, SQ-06)
+JOB_TITLES = {
+    "daily": "Щоденні задачі: завершення дозволів і нагадування, строки зберігання, резервна копія",
+    "import": "Імпорт відкритих даних за розкладом конекторів",
+}
+
+
+@router.get("/jobs")
+def list_jobs(_: User = Depends(admin_only), db: Session = Depends(get_db)) -> list[dict]:
+    """Коли й чим востаннє запускалась кожна задача дня (GitHub, наздоганяння сервером, адміністратор)."""
+    out = []
+    for j in db.scalars(select(JobRun).order_by(JobRun.name)):
+        out.append(
+            {
+                "name": j.name,
+                "title": JOB_TITLES.get(j.name, j.name),
+                "last_date": iso(j.last_date),
+                "trigger": j.trigger,
+                "started_at": iso(j.started_at),
+                "finished_at": iso(j.finished_at),
+                "result": json.loads(j.result) if j.result else None,
+            }
+        )
+    return out
+
+
+@router.post("/jobs/{name}/run", status_code=202)
+def run_job_now(
+    name: str,
+    request: Request,
+    background: BackgroundTasks,
+    admin: User = Depends(admin_only),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Запустити задачу зараз, навіть якщо сьогодні вона вже виконувалась (усі задачі ідемпотентні)."""
+    job = db.get(JobRun, name)
+    if job is None:
+        raise ApiError(404, "NOT_FOUND")
+    job.trigger, job.started_at, job.finished_at, job.result = "admin", datetime.now(UTC), None, None
+    log_change(db, request, admin, "job", name, {"manual_run": [None, "admin"]})
+    db.commit()
+    background.add_task(scheduler.run_job, name, request_id(request), False)
+    return {
+        "message": "Задачу запущено; результат з'явиться на цій сторінці.",
+        "request_id": request_id(request),
+    }

@@ -1,15 +1,17 @@
-# Щоденні службові задачі: завершення прострочених дозволів і анулювання угод, не прийнятих за 14 днів (UC-19, FR-28);
-# строки зберігання й анонімізація через 30 днів (табл. 3.26, DG-23, DG-24).
-# Доступ і без цього перевіряється за строком на кожному зверненні (DG-05); задача лише впорядковує статуси й листи.
+# Будильник щоденних задач (S-40). Розклад GitHub для нас ненадійний (затримки на години, пропуски),
+# тому сервер сам «доганяє» задачі дня з першим запитом після 03:00 UTC, а цей workflow лише гарантує,
+# що такий запит буде. Що саме запускати й чи вже запускалось — вирішує сервер (таблиця job_runs):
+# завершення дозволів і нагадування (UC-19), строки зберігання (DG-23, DG-24), резервна копія (NFR-10),
+# імпорт конекторів за їхнім розкладом (UC-14). Ручний запуск: Run workflow.
 name: Daily jobs
 
 on:
   schedule:
-    - cron: "15 2 * * *" # щодня 02:15 UTC
+    - cron: "23 3 * * *" # щодня 03:23 UTC — некругла хвилина (GitHub радить уникати :00)
   workflow_dispatch:
 
 jobs:
-  expire-grants:
+  wake:
     runs-on: ubuntu-latest
     steps:
       - name: Розбудити сервер (Render Free засинає після 15 хв)
@@ -19,13 +21,8 @@ jobs:
             sleep 10
           done
           exit 1
-      - name: Завершити прострочені дозволи
+      - name: Запустити задачі дня, яких сервер ще не виконав
         env:
           JOB_TOKEN: ${{ secrets.JOB_TOKEN }}
         run: |
-          curl -fsS -X POST -H "X-Job-Token: $JOB_TOKEN" https://gedh.vercel.app/api/internal/jobs/expire-grants
-      - name: Строки зберігання й анонімізація (DG-23, DG-24)
-        env:
-          JOB_TOKEN: ${{ secrets.JOB_TOKEN }}
-        run: |
-          curl -fsS -X POST -H "X-Job-Token: $JOB_TOKEN" https://gedh.vercel.app/api/internal/jobs/retention
+          curl -fsS -X POST -H "X-Job-Token: $JOB_TOKEN" https://gedh.vercel.app/api/internal/jobs/daily

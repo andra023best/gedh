@@ -12,7 +12,7 @@ from fastapi import APIRouter, BackgroundTasks, Request
 from sqlalchemy import delete, or_, select
 
 from app.api.exchange import OFFER_TTL, admins, notify, providers_of, req_link
-from app.core import audit
+from app.core import audit, scheduler
 from app.core.config import get_settings
 from app.core.db import new_session
 from app.core.deps import request_id
@@ -192,6 +192,14 @@ def business_days_between(start: datetime, end: datetime) -> int:
         if d.weekday() < 5 and d <= end.date():
             days += 1
     return days
+
+
+@router.post("/daily", status_code=202)
+def job_daily(request: Request, background: BackgroundTasks) -> dict:
+    """S-40: «будильник» від GitHub Actions — запускає задачі дня, яких сервер ще не виконав сам."""
+    check_job_token(request)
+    background.add_task(scheduler.run_due, "github")
+    return {"message": "Перевірку задач дня запущено", "request_id": request_id(request)}
 
 
 @router.post("/expire-grants")

@@ -2124,6 +2124,58 @@ paths:
           description: "`JOB_TOKEN_INVALID`"
           content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
 
+  /internal/jobs/daily:
+    post:
+      tags: [internal]
+      summary: Будильник задач дня (GitHub Actions)
+      description: |
+        S-40: запускає у фоні задачі дня, яких сервер ще не виконав сам (наздоганяння з першим запитом після 03:00 UTC):
+        `daily` — завершення дозволів і нагадування, строки зберігання, резервна копія Neon (NFR-10); `import` — конектори
+        за розкладом. Таблиця `job_runs` гарантує один запуск на день. 202 одразу.
+      operationId: jobDaily
+      security:
+        - jobToken: []
+      x-roles: [SYSTEM]
+      x-fr: [FR-17, FR-28]
+      x-uc: [UC-14, UC-19]
+      x-dg: [DG-23]
+      responses:
+        "202":
+          description: Перевірку розпочато
+          content: { application/json: { schema: { $ref: "#/components/schemas/Message" } } }
+        "401":
+          description: "`JOB_TOKEN_INVALID`"
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  /admin/jobs:
+    get:
+      tags: [admin-config]
+      summary: Службові задачі — останній запуск і результат
+      operationId: listJobs
+      x-roles: [ADMIN]
+      x-priority: Should
+      x-fr: [FR-17]
+      x-uc: [UC-20]
+      responses:
+        "200": { description: "Задачі `daily` і `import`: дата, хто запустив (github / catch-up / admin), результат" }
+
+  /admin/jobs/{name}/run:
+    parameters:
+      - { name: name, in: path, required: true, schema: { type: string, enum: [daily, import] } }
+    post:
+      tags: [admin-config]
+      summary: Запустити службову задачу зараз
+      description: "Навіть якщо сьогодні вже виконувалась (задачі ідемпотентні); `import` вручну — усі увімкнені конектори."
+      operationId: runJob
+      x-roles: [ADMIN]
+      x-priority: Should
+      x-fr: [FR-17]
+      x-uc: [UC-20]
+      x-audit: CONFIG_CHANGE (manual_run)
+      responses:
+        "202": { description: Задачу запущено }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /internal/jobs/expire-grants:
     post:
       tags: [internal]

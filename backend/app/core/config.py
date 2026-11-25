@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # порожній рядок вимикає. Якщо власник не має права SET ROLE на неї — застосунок працює без неї
     # і повідомляє це в /api/health (db.app_role).
     db_app_role: str = "gedh_app"
+    # S-40: сервер сам «доганяє» щоденні задачі (у тестах вимкнено)
+    scheduler_enabled: bool = True
+    # SQ-07 / NFR-10: щоденна гілка-знімок у Neon; без ключа резервне копіювання пропускається
+    neon_api_key: str | None = None
+    neon_project_id: str | None = None
 
     @property
     def sqlalchemy_url(self) -> str | None:

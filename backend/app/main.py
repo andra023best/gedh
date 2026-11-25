@@ -25,7 +25,7 @@ from app.api import (
     reference,
     uploads,
 )
-from app.core import errors
+from app.core import errors, scheduler
 from app.core.config import get_settings
 from app.core.proxy_guard import ProxyGuardMiddleware
 
@@ -84,6 +84,7 @@ def create_app() -> FastAPI:
             )
         )
         response.headers["X-Request-ID"] = request.state.request_id
+        scheduler.kick()  # S-40: наздогнати щоденні задачі, якщо GitHub не спрацював
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Cache-Control", "no-store")  # відповіді API з персональними даними
         return response

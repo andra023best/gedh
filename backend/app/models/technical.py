@@ -1,9 +1,9 @@
 """Технічні таблиці, яких немає на діаграмах класів (нотатки для розробки, розд. 2; S-17)."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import ForeignKey, Integer, LargeBinary, String, Text
+from sqlalchemy import Date, ForeignKey, Integer, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, created_at, tz, uuid_pk
@@ -78,3 +78,20 @@ class Notification(Base):
     link: Mapped[str | None] = mapped_column(String(300))
     created_at: Mapped[datetime] = created_at()
     read_at: Mapped[datetime | None] = tz()
+
+
+class JobRun(Base):
+    """Останній запуск щоденної службової задачі (S-40): сервер «доганяє» пропущені запуски GitHub Actions.
+
+    `last_date` — дата UTC, за яку задачу вже взято; оновлення умовним UPDATE гарантує один запуск на день,
+    хоч би скільки разів її викликали (GitHub, перший запит відвідувача, адміністратор).
+    """
+
+    __tablename__ = "job_runs"
+
+    name: Mapped[str] = mapped_column(String(30), primary_key=True)  # daily | import
+    last_date: Mapped[date | None] = mapped_column(Date)
+    trigger: Mapped[str | None] = mapped_column(String(20))  # github | catch-up | admin
+    started_at: Mapped[datetime | None] = tz()
+    finished_at: Mapped[datetime | None] = tz()
+    result: Mapped[str | None] = mapped_column(Text)
